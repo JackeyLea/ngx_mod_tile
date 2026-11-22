@@ -16,6 +16,8 @@
 
 #include "protocol.h"
 #include "store.h"
+#include "tile_stats_shm.h"
+#include "tile_delaypool_shm.h"
 
 /*
  * Maximum zoom tracked by server-side configuration (same as
@@ -92,6 +94,7 @@ typedef struct {
     ngx_str_t     store_uri;        /* tile dir or backend URI (NUL-terminated) */
     ngx_array_t  *hostnames;        /* ngx_str_t TileJSON URL prefixes; may be NULL */
     ngx_flag_t    enable_options;   /* /<options>/z/x/y.ext/<option> URLs enabled */
+    ngx_uint_t    stats_index;      /* per-layer counter index in the stats zone */
 } ngx_http_tile_layer_t;
 
 /**
@@ -110,6 +113,7 @@ typedef struct {
     ngx_tile_state_e        tile_state;
     struct storage_backend *store;
     ngx_uint_t              endpoint;  /* NGX_TILE_EP_* */
+    ngx_uint_t              resp_status;   /* final status, for the counters */
     unsigned                oob:1;     /* URI parsed but coordinates out of bounds */
     time_t                  mtime;     /* tile mtime from tile_stat (sec) */
     time_t                  atime;
@@ -161,6 +165,18 @@ typedef struct {
     /* server-scope: layers imported from renderd.conf */
     ngx_str_t               import_config;
     ngx_array_t            *imported_layers; /* ngx_http_tile_layer_t */
+
+    /* stage 2: statistics + per-IP throttling */
+    ngx_flag_t              enable_stats;     /* tile_enable_stats, default on */
+    ngx_flag_t              stats_page;       /* tile_stats on -> /mod_tile page */
+    ngx_flag_t              metrics_page;     /* tile_metrics on -> /metrics page */
+    ngx_int_t               throttle_tile_bucket;   /* default 5000 */
+    ngx_int_t               throttle_render_bucket; /* default 65 */
+    ngx_msec_t              throttle_tile_interval;   /* ms per tile token, default 1000 */
+    ngx_msec_t              throttle_render_interval; /* ms per render token, default 5000 */
+    ngx_int_t               throttle_xforward;        /* 0 off, 1 first XFF, 2 last XFF */
+    ngx_flag_t              throttle_enabled;         /* tile_throttling on, default off */
+    ngx_array_t            *throttle_whitelist;       /* in_addr_t, up to 13 */
 } ngx_http_tile_loc_conf_t;
 
 /** @brief Shared storage-backend instance cached per worker. */
@@ -169,9 +185,24 @@ typedef struct {
     struct storage_backend  *store;
 } ngx_http_tile_store_t;
 
-/** @brief Module main configuration: per-worker store instance cache. */
+/** @brief Module main configuration: shared caches and registries. */
 typedef struct {
     ngx_array_t   *stores;       /* ngx_http_tile_store_t */
+
+    /* stage 2: statistics */
+    ngx_str_t      stats_zone_size_str;    /* tile_stats_zone (http scope), default "4m" */
+    ngx_str_t      throttle_zone_size_str; /* tile_throttling_zone (http scope), empty = off */
+    ngx_uint_t     layer_count;      /* assigned at config parse, size of per-layer arrays */
+    ngx_uint_t     global_max_zoom;  /* max zoom over all layers, for stats output */
+    ngx_array_t   *layers_registry;  /* ngx_http_tile_layer_t* in parse order */
+    ngx_shm_zone_t *stats_zone;
+    ngx_http_tile_stats_shm_t *stats;      /* shm counters, NULL when zone failed */
+    ngx_slab_pool_t *stats_slab;
+
+    /* stage 2: per-IP delaypool */
+    ngx_shm_zone_t *throttle_zone;
+    ngx_tile_delaypool_shm_t *delaypool;   /* NULL when throttling disabled */
+    ngx_slab_pool_t *delaypool_slab;
 } ngx_http_tile_main_conf_t;
 
 extern ngx_module_t ngx_http_tile_module;
@@ -191,7 +222,7 @@ void ngx_http_tile_close_stores(ngx_http_tile_main_conf_t *mcf);
 ngx_int_t ngx_http_tile_matcher(ngx_http_request_t *r);
 ngx_int_t ngx_http_tile_content(ngx_http_request_t *r);
 ngx_int_t ngx_http_tile_check_state(ngx_http_request_t *r,
-    ngx_http_tile_ctx_t *ctx);
+    ngx_http_tile_ctx_t *ctx, ngx_int_t render_rc);
 
 /* tile_renderd.c */
 ngx_int_t ngx_http_tile_render_submit(ngx_http_request_t *r,
@@ -216,5 +247,20 @@ ngx_int_t ngx_http_tile_endpoint_status(ngx_http_request_t *r,
     ngx_http_tile_ctx_t *ctx);
 ngx_int_t ngx_http_tile_endpoint_dirty(ngx_http_request_t *r,
     ngx_http_tile_ctx_t *ctx);
+
+/* tile_stats.c / tile_delaypool.c (stage 2) */
+ngx_int_t ngx_http_tile_stats_init_zone_conf(ngx_conf_t *cf,
+    ngx_http_tile_main_conf_t *mcf);
+ngx_int_t ngx_http_tile_delaypool_init_zone_conf(ngx_conf_t *cf,
+    ngx_http_tile_main_conf_t *mcf);
+void ngx_http_tile_stats_response(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx, ngx_uint_t status);
+void ngx_http_tile_stats_fresh(ngx_http_tile_main_conf_t *mcf, ngx_int_t code);
+void ngx_http_tile_stats_timing(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx, ngx_int_t usec);
+ngx_int_t ngx_http_tile_stats_page(ngx_http_request_t *r);
+ngx_int_t ngx_http_tile_metrics_page(ngx_http_request_t *r);
+ngx_int_t ngx_http_tile_delay_allowed(ngx_http_request_t *r,
+    ngx_http_tile_loc_conf_t *tlcf, ngx_tile_state_e state);
 
 #endif /* NGX_MOD_TILE_H */

@@ -13,6 +13,8 @@
 
 #include "ngx_mod_tile.h"
 #include "tile_config.h"
+#include "tile_stats.h"
+#include "tile_delaypool.h"
 
 static void *ngx_http_tile_create_main_conf(ngx_conf_t *cf);
 static ngx_int_t ngx_http_tile_init(ngx_conf_t *cf);
@@ -62,6 +64,15 @@ ngx_http_tile_create_main_conf(ngx_conf_t *cf)
         return NULL;
     }
 
+    mcf->layers_registry = ngx_array_create(cf->pool, 8,
+        sizeof(ngx_http_tile_layer_t *));
+    if (mcf->layers_registry == NULL) {
+        return NULL;
+    }
+
+    mcf->stats_zone_size_str.data = (u_char *) NGX_TILE_STATS_ZONE_DEFAULT;
+    mcf->stats_zone_size_str.len = sizeof(NGX_TILE_STATS_ZONE_DEFAULT) - 1;
+
     return mcf;
 }
 
@@ -70,6 +81,8 @@ ngx_http_tile_init(ngx_conf_t *cf)
 {
     ngx_http_core_main_conf_t *cmcf;
     ngx_http_handler_pt       *h;
+    ngx_http_tile_main_conf_t *mcf;
+    ngx_uint_t                 i;
 
     /* claim matching requests before the access checks and the static
      * content handler (r->content_handler is called by the core content
@@ -82,6 +95,35 @@ ngx_http_tile_init(ngx_conf_t *cf)
     }
 
     *h = ngx_http_tile_matcher;
+
+    mcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_tile_module);
+
+    /* final layer values are available now: compute the stats zoom range */
+    mcf->global_max_zoom = 0;
+
+    for (i = 0; i < mcf->layers_registry->nelts; i++) {
+        ngx_http_tile_layer_t *layer =
+            ((ngx_http_tile_layer_t **) mcf->layers_registry->elts)[i];
+
+        if ((ngx_uint_t) layer->maxzoom > mcf->global_max_zoom) {
+            mcf->global_max_zoom = (ngx_uint_t) layer->maxzoom;
+        }
+    }
+
+    if (mcf->global_max_zoom > NGX_TILE_MAX_ZOOM_SERVER) {
+        mcf->global_max_zoom = NGX_TILE_MAX_ZOOM_SERVER;
+    }
+
+    /* shared-memory zones (counters + delaypool) */
+    if (ngx_http_tile_stats_init_zone_conf(cf, mcf) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (mcf->throttle_zone_size_str.len != 0
+        && ngx_http_tile_delaypool_init_zone_conf(cf, mcf) != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
 
     return NGX_OK;
 }
