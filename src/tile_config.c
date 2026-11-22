@@ -14,6 +14,7 @@
 #include <iniparser.h>
 #include <string.h>
 #include <stdlib.h>
+#include <arpa/inet.h>
 
 #include "ngx_mod_tile.h"
 #include "tile_config.h"
@@ -36,6 +37,14 @@ static char *ngx_http_tile_cache_low_medium_directive(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
 static char *ngx_http_tile_import_config_directive(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
+static char *ngx_http_tile_throttle_bucket_directive(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf);
+static char *ngx_http_tile_throttle_whitelist_directive(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf);
+static char *ngx_http_tile_throttle_xforward_directive(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf);
+static ngx_int_t ngx_http_tile_register_layer(ngx_conf_t *cf,
+    ngx_http_tile_main_conf_t *mcf, ngx_http_tile_layer_t *layer);
 
 ngx_command_t ngx_http_tile_commands[] = {
 
@@ -260,6 +269,76 @@ ngx_command_t ngx_http_tile_commands[] = {
       offsetof(ngx_http_tile_loc_conf_t, enable_status_url),
       NULL },
 
+    { ngx_string("tile_enable_stats"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_tile_loc_conf_t, enable_stats),
+      NULL },
+
+    { ngx_string("tile_stats_zone"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      offsetof(ngx_http_tile_main_conf_t, stats_zone_size_str),
+      NULL },
+
+    { ngx_string("tile_stats"),
+      NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_tile_loc_conf_t, stats_page),
+      NULL },
+
+    { ngx_string("tile_metrics"),
+      NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_tile_loc_conf_t, metrics_page),
+      NULL },
+
+    { ngx_string("tile_throttling"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_flag_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_tile_loc_conf_t, throttle_enabled),
+      NULL },
+
+    { ngx_string("tile_throttling_zone"),
+      NGX_HTTP_MAIN_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_MAIN_CONF_OFFSET,
+      offsetof(ngx_http_tile_main_conf_t, throttle_zone_size_str),
+      NULL },
+
+    { ngx_string("tile_throttling_tiles"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
+      ngx_http_tile_throttle_bucket_directive,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("tile_throttling_renders"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
+      ngx_http_tile_throttle_bucket_directive,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("tile_throttling_whitelist"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+      ngx_http_tile_throttle_whitelist_directive,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("tile_throttling_xforward"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_http_tile_throttle_xforward_directive,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_tile_loc_conf_t, throttle_xforward),
+      NULL },
+
     { ngx_string("tile_import_config"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
       ngx_http_tile_import_config_directive,
@@ -310,6 +389,15 @@ ngx_http_tile_create_loc_conf(ngx_conf_t *cf)
     tlcf->enable_bulk_mode = NGX_CONF_UNSET;
     tlcf->enable_dirty_url = NGX_CONF_UNSET;
     tlcf->enable_status_url = NGX_CONF_UNSET;
+    tlcf->enable_stats = NGX_CONF_UNSET;
+    tlcf->stats_page = NGX_CONF_UNSET;
+    tlcf->metrics_page = NGX_CONF_UNSET;
+    tlcf->throttle_tile_bucket = NGX_CONF_UNSET;
+    tlcf->throttle_render_bucket = NGX_CONF_UNSET;
+    tlcf->throttle_tile_interval = NGX_CONF_UNSET;
+    tlcf->throttle_render_interval = NGX_CONF_UNSET;
+    tlcf->throttle_xforward = NGX_CONF_UNSET;
+    tlcf->throttle_enabled = NGX_CONF_UNSET;
 
     return tlcf;
 }
@@ -385,6 +473,24 @@ ngx_http_tile_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_value(conf->enable_dirty_url, prev->enable_dirty_url, 1);
     ngx_conf_merge_value(conf->enable_status_url, prev->enable_status_url, 1);
 
+    ngx_conf_merge_value(conf->enable_stats, prev->enable_stats, 1);
+    ngx_conf_merge_value(conf->stats_page, prev->stats_page, 0);
+    ngx_conf_merge_value(conf->metrics_page, prev->metrics_page, 0);
+    ngx_conf_merge_value(conf->throttle_tile_bucket,
+                         prev->throttle_tile_bucket, 5000);
+    ngx_conf_merge_value(conf->throttle_render_bucket,
+                         prev->throttle_render_bucket, 65);
+    ngx_conf_merge_msec_value(conf->throttle_tile_interval,
+                              prev->throttle_tile_interval, 1000);
+    ngx_conf_merge_msec_value(conf->throttle_render_interval,
+                              prev->throttle_render_interval, 5000);
+    ngx_conf_merge_value(conf->throttle_xforward, prev->throttle_xforward, 0);
+    ngx_conf_merge_value(conf->throttle_enabled, prev->throttle_enabled, 0);
+
+    if (conf->throttle_whitelist == NULL) {
+        conf->throttle_whitelist = prev->throttle_whitelist;
+    }
+
     if (conf->imported_layers == NULL) {
         conf->imported_layers = prev->imported_layers;
     }
@@ -437,6 +543,13 @@ ngx_http_tile_layer_directive(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     tlcf->layer.xmlname = value[1];
     tlcf->layer.baseuri = clcf->name;
+
+    if (ngx_http_tile_register_layer(cf, cf->ctx
+        ? ngx_http_conf_get_module_main_conf(cf, ngx_http_tile_module)
+        : NULL, &tlcf->layer) != NGX_OK)
+    {
+        return NGX_CONF_ERROR;
+    }
 
     return NGX_CONF_OK;
 }
@@ -640,6 +753,133 @@ ngx_http_tile_import_config_directive(ngx_conf_t *cf, ngx_command_t *cmd,
     }
 
     return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_tile_throttle_bucket_directive(ngx_conf_t *cf, ngx_command_t *cmd,
+    void *conf)
+{
+    ngx_http_tile_loc_conf_t *tlcf = conf;
+    ngx_str_t                 *value = cf->args->elts;
+    ngx_int_t                  tokens;
+    double                     rate;
+
+    tokens = ngx_atoi(value[1].data, value[1].len);
+    if (tokens == NGX_ERROR || tokens < 0) {
+        return "is not a valid token count";
+    }
+
+    rate = strtod((char *) value[2].data, NULL);
+    if (rate <= 0) {
+        return "is not a valid refill rate";
+    }
+
+    if (ngx_strcmp(cmd->name.data, "tile_throttling_tiles") == 0) {
+        tlcf->throttle_tile_bucket = tokens;
+        tlcf->throttle_tile_interval =
+            (ngx_msec_t) (1000.0 / rate + 0.5);
+    } else {
+        tlcf->throttle_render_bucket = tokens;
+        tlcf->throttle_render_interval =
+            (ngx_msec_t) (1000.0 / rate + 0.5);
+    }
+
+    if (tlcf->throttle_tile_interval < 1) {
+        tlcf->throttle_tile_interval = 1;
+    }
+    if (tlcf->throttle_render_interval < 1) {
+        tlcf->throttle_render_interval = 1;
+    }
+
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_tile_throttle_whitelist_directive(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf)
+{
+    ngx_http_tile_loc_conf_t *tlcf = conf;
+    ngx_str_t                 *value = cf->args->elts;
+    char                       ipbuf[48];
+    struct in_addr             sin;
+    in_addr_t                 *entry;
+
+    if (value[1].len >= sizeof(ipbuf)) {
+        return "is not a valid IPv4 address";
+    }
+
+    ngx_memcpy(ipbuf, value[1].data, value[1].len);
+    ipbuf[value[1].len] = '\0';
+
+    if (inet_pton(AF_INET, ipbuf, &sin) != 1) {
+        return "is not a valid IPv4 address";
+    }
+
+    if (tlcf->throttle_whitelist == NULL) {
+        tlcf->throttle_whitelist = ngx_array_create(cf->pool, 4,
+                                                    sizeof(in_addr_t));
+        if (tlcf->throttle_whitelist == NULL) {
+            return NGX_CONF_ERROR;
+        }
+    }
+
+    if (tlcf->throttle_whitelist->nelts
+        >= NGX_TILE_DELAYPOOL_WHITELIST_SIZE)
+    {
+        return "whitelist is full (13 entries max)";
+    }
+
+    entry = ngx_array_push(tlcf->throttle_whitelist);
+    if (entry == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    *entry = sin.s_addr;
+
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_tile_throttle_xforward_directive(ngx_conf_t *cf, ngx_command_t *cmd,
+    void *conf)
+{
+    ngx_str_t  *value = cf->args->elts;
+    ngx_int_t   n;
+
+    n = ngx_atoi(value[1].data, value[1].len);
+    if (n == NGX_ERROR || n < 0 || n > 2) {
+        return "must be 0 (off), 1 (first XFF entry) or 2 (last XFF entry)";
+    }
+
+    *(ngx_int_t *) ((char *) conf + cmd->offset) = n;
+
+    return NGX_CONF_OK;
+}
+
+static ngx_int_t
+ngx_http_tile_register_layer(ngx_conf_t *cf,
+    ngx_http_tile_main_conf_t *mcf, ngx_http_tile_layer_t *layer)
+{
+    ngx_http_tile_layer_t **entry;
+
+    if (mcf == NULL) {
+        return NGX_OK;
+    }
+
+    layer->stats_index = mcf->layer_count++;
+
+    if (mcf->layers_registry == NULL) {
+        return NGX_OK; /* create_main_conf allocates it; NULL here is fatal */
+    }
+
+    entry = ngx_array_push(mcf->layers_registry);
+    if (entry == NULL) {
+        return NGX_ERROR;
+    }
+
+    *entry = layer;
+
+    return NGX_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -883,10 +1123,17 @@ ngx_http_tile_import_config(ngx_conf_t *cf, ngx_http_tile_loc_conf_t *tlcf)
 
         for (i = 0; i < count; i++) {
             ngx_http_tile_layer_t *entry = ngx_array_push(tlcf->imported_layers);
+            ngx_http_tile_main_conf_t *rmcf;
+
             if (entry == NULL) {
                 return NGX_CONF_ERROR;
             }
             *entry = layers[i];
+
+            rmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_tile_module);
+            if (ngx_http_tile_register_layer(cf, rmcf, entry) != NGX_OK) {
+                return NGX_CONF_ERROR;
+            }
         }
     }
 
