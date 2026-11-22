@@ -1087,7 +1087,9 @@ ngx_http_tile_import_config(ngx_conf_t *cf, ngx_http_tile_loc_conf_t *tlcf)
                                             &layer->mime_type);
                 break;
             default:
-                err = (char *) "tile_import_config: type has too many parts";
+                /* output_format (mapnik encoding) is not needed by the
+                 * module: skip it instead of erroring like upstream would
+                 * when reading >3 tokens */
                 break;
             }
 

@@ -21,4 +21,6 @@ if [ "$DEMO_RENDERD" = "internal" ]; then
         || echo "127.0.0.1 renderd" >> /etc/hosts
 fi
 
-exec /usr/local/nginx/sbin/nginx -g 'daemon off;' -c /etc/nginx/nginx.conf
+NGINX_CONF="${NGINX_CONF:-/etc/nginx/nginx.conf}"
+
+exec /usr/local/nginx/sbin/nginx -g 'daemon off;' -c "$NGINX_CONF"

@@ -49,12 +49,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/local/nginx /usr/local/nginx
 COPY docker/nginx.conf /etc/nginx/nginx.conf
+COPY docker/nginx-osm.conf /etc/nginx/nginx-osm.conf
+COPY docker/index.html /usr/local/nginx/html/index.html
 COPY docker/demo_renderd.py /opt/demo/demo_renderd.py
 COPY docker/docker-entrypoint.sh /entrypoint.sh
 COPY tests/gen_metatiles.py /opt/demo/gen_metatiles.py
 
+# vendored Leaflet (tarball downloaded on the host by prepare-renderd.sh)
+# so the map page works fully offline
+COPY docker/leaflet.tgz /tmp/leaflet.tgz
+RUN mkdir -p /usr/local/nginx/html/leaflet /tmp/leaflet \
+    && tar xzf /tmp/leaflet.tgz -C /tmp/leaflet \
+    && cp /tmp/leaflet/package/dist/leaflet.js \
+          /tmp/leaflet/package/dist/leaflet.css \
+          /usr/local/nginx/html/leaflet/ \
+    && cp -r /tmp/leaflet/package/dist/images \
+          /usr/local/nginx/html/leaflet/images \
+    && rm -rf /tmp/leaflet
+
 ENV TILE_DIR=/data/tiles \
-    DEMO_RENDERD=internal
+    DEMO_RENDERD=internal \
+    NGINX_CONF=/etc/nginx/nginx.conf
 
 RUN mkdir -p /data/tiles /var/log/nginx /var/cache/nginx \
     && chmod +x /entrypoint.sh /usr/local/nginx/sbin/nginx

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ngx_mod_tile - offline OSM demo</title>
+    <link rel="stylesheet" href="/leaflet/leaflet.css">
+    <style>
+        html, body { height: 100%; margin: 0; }
+        #map { width: 100%; height: 100%; }
+        .info { padding: 6px 8px; font: 14px/16px Arial, sans-serif;
+                background: white; background: rgba(255,255,255,0.9);
+                box-shadow: 0 0 15px rgba(0,0,0,0.2); border-radius: 5px; }
+    </style>
+</head>
+<body>
+<div id="map"></div>
+<script src="/leaflet/leaflet.js"></script>
+<script>
+    // Map center: adjust to your extract (Baku by default)
+    var map = L.map('map').setView([40.4093, 49.8671], 12);
+
+    // tiles come from ngx_mod_tile, rendered on demand by renderd + Mapnik
+    L.tileLayer('/tiles/{z}/{x}/{y}.png', {
+        maxZoom: 20,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+
+    L.control.scale({imperial: false}).addTo(map);
+
+    var info = L.control({position: 'topright'});
+    info.onAdd = function () {
+        var div = L.DomUtil.create('div', 'info');
+        div.innerHTML = '<b>ngx_mod_tile</b><br>offline OSM tile server<br>(nginx + renderd + Mapnik)';
+        return div;
+    };
+    info.addTo(map);
+</script>
+</body>
+</html>

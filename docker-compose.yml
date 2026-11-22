@@ -40,6 +40,7 @@ services:
     environment:
       DEMO_RENDERD: external
       TILE_DIR: /data/tiles
+      NGINX_CONF: /etc/nginx/nginx.conf
     volumes:
       - tiles:/data/tiles
     ports:
@@ -50,8 +51,97 @@ services:
       - tile
     restart: unless-stopped
 
+  # ------------------------------------------------------------------
+  # real rendering stack (profile "osm"): PostGIS + osm2pgsql import +
+  # renderd/Mapnik with the openstreetmap-carto style + Leaflet frontend.
+  #
+  #   1. put your .pbf extract into maps/  (maps/download-demo-map.sh)
+  #   2. docker compose --profile osm up -d --build
+  #   3. wait for the import to finish (docker compose logs -f import)
+  #   4. open http://localhost:8090/
+  # ------------------------------------------------------------------
+
+  db:
+    image: ${REGISTRY_MIRROR:-docker.m.daocloud.io}/postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${DB_NAME:-gis}
+      POSTGRES_USER: ${DB_USER:-gis}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-gispass}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-gis} -d ${DB_NAME:-gis}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - gisdb:/var/lib/postgresql/data
+    networks:
+      - tile
+    restart: unless-stopped
+
+  import:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.renderd
+    image: ngx-mod-tile-renderd:latest
+    entrypoint: ["/opt/import-osm.sh"]
+    environment:
+      RENDERD_ROLE: import
+      DB_HOST: db
+      IMPORT_EXTERNAL: ${IMPORT_EXTERNAL:-yes}
+      DB_NAME: ${DB_NAME:-gis}
+      DB_USER: ${DB_USER:-gis}
+      DB_PASSWORD: ${DB_PASSWORD:-gispass}
+      MAPS_DIR: /maps
+    volumes:
+      - ./maps:/maps:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - tile
+    restart: "no"
+
+  osm-renderd:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.renderd
+    image: ngx-mod-tile-renderd:latest
+    environment:
+      RENDERD_ROLE: render
+      DB_HOST: db
+      DB_NAME: ${DB_NAME:-gis}
+      DB_USER: ${DB_USER:-gis}
+      DB_PASSWORD: ${DB_PASSWORD:-gispass}
+    volumes:
+      - tiles:/data/tiles
+      - renderd-run:/run/renderd
+      - ./docker/renderd.conf:/etc/renderd/renderd.conf:ro
+    networks:
+      - tile
+    restart: unless-stopped
+
+  osm-tileserver:
+    image: ngx-mod-tile:latest
+    environment:
+      NGINX_CONF: /etc/nginx/nginx-osm.conf
+      TILE_DIR: /data/tiles
+      DEMO_RENDERD: external
+    volumes:
+      - tiles:/data/tiles
+      - renderd-run:/run/renderd
+      - ./docker/renderd.conf:/etc/renderd/renderd.conf:ro
+    ports:
+      - "8091:8080"
+    depends_on:
+      - osm-renderd
+    networks:
+      - tile
+    restart: unless-stopped
+
 networks:
   tile: {}
 
 volumes:
   tiles: {}
+  gisdb: {}
+  renderd-run: {}

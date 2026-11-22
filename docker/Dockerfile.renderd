@@ -1,0 +1,80 @@
+# syntax=docker/dockerfile:1
+
+# ############################################################################
+# renderd + Mapnik + openstreetmap-carto on Ubuntu 24.04 LTS.
+#
+# Mirrors the setup guide at blog.jackeylea.com (offline OSM map server):
+# PostgreSQL data lives in the separate postgis service; this image carries
+# renderd, Mapnik, the compiled carto style and osm2pgsql (used by the one-shot
+# import service).
+#
+# All downloads use CN mirrors by default (override with build args):
+#   --build-arg APT_MIRROR=mirrors.cloud.tencent.com
+#   --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+#   --build-arg GH_PROXY=            (empty = direct github)
+# ############################################################################
+
+FROM ubuntu:24.04
+
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+ARG APT_MIRROR=mirrors.cloud.tencent.com
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG GH_PROXY=
+ARG OSCARTO_VERSION=v5.9.0
+ARG CARTO_VERSION=1.2.0
+
+# Ubuntu 24.04 deb822 sources use https://archive.ubuntu.com but the bare
+# image has no CA certificates: bootstrap certificates from the default http
+# source first, then switch to the CN https mirror for the real install.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN sed -i "s|https\?://archive.ubuntu.com/ubuntu/|http://${APT_MIRROR}/ubuntu/|g; \
+            s|https\?://security.ubuntu.com/ubuntu/|http://${APT_MIRROR}/ubuntu/|g" \
+        /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        renderd mapnik-utils \
+        osm2pgsql postgresql-client \
+        npm nodejs \
+        python3 python3-psycopg2 python3-yaml python3-shapely \
+        python3-lxml python3-colormath \
+        unzip curl git \
+        fonts-noto-cjk fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# openstreetmap-carto style, prepared on the host by docker/prepare-renderd.sh
+COPY .osm-carto /opt/osm-carto
+
+WORKDIR /opt/osm-carto
+
+# compile project.mml -> mapnik.xml with carto (CN npm registry)
+RUN npm config set registry ${NPM_REGISTRY} \
+    && npm install -g carto@${CARTO_VERSION} \
+    && carto project.mml > mapnik.xml
+
+# road colours + shield icons are generated as static assets for mapnik.xml
+# (pure python: lxml + colormath)
+RUN python3 scripts/generate_road_colours.py \
+    && python3 scripts/generate_shields.py \
+    || echo "WARNING: shield/colour generation failed; roads may look plain"
+
+# style fonts from google/github are unreachable from CN networks in many
+# cases: tolerate failure (fonts-noto-cjk above is the fallback)
+RUN sh scripts/get-fonts.sh || \
+    echo "WARNING: style font download failed; using system Noto fonts"
+
+COPY docker/renderd.conf /etc/renderd/renderd.conf
+
+# import helper for the one-shot osm2pgsql service
+COPY docker/import-osm.sh /opt/import-osm.sh
+RUN chmod +x /opt/import-osm.sh \
+    && mkdir -p /data/tiles /run/renderd /var/lib/renderd
+
+EXPOSE 7654
+
+COPY docker/renderd-entrypoint.sh /opt/renderd-entrypoint.sh
+RUN chmod +x /opt/renderd-entrypoint.sh
+
+ENTRYPOINT ["/opt/renderd-entrypoint.sh"]

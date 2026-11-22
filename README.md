@@ -192,6 +192,21 @@ startup when a network URI is configured without a pool.
 | Stats / throttling | built-in, global fill-up pass over 100k slots | stage 2: shm zones, per-slot lazy refill, immediate 503 (no `sleep(3)`), config-based whitelist |
 | renderd protocol | v2/v3 | v2/v3 — **drop-in compatible with an existing renderd and tile store** |
 
+## Map data directory (`maps/`)
+
+`maps/` holds OSM extracts for the real rendering stack:
+
+```sh
+./maps/download-demo-map.sh          # Baku ~12 MB (BBBike; Geofabrik is unreachable from CN)
+# or any Geofabrik region:
+OSM_PBF_URL="https://download.geofabrik.de/asia/azerbaijan-latest.osm.pbf" \
+    ./maps/download-demo-map.sh azerbaijan
+```
+
+`*.pbf` files are git-ignored; the offline demo stack does not need them
+(it uses the generated placeholder store), but the real rendering stack
+(profile `osm`) imports whatever `.pbf` is in `maps/`.
+
 ## Docker
 
 One-command build + run (multi-stage image: nginx + module compiled with
@@ -219,9 +234,41 @@ curl http://localhost:8090/mod_tile                   # text counters
 curl http://localhost:8090/metrics                    # Prometheus
 ```
 
-The renderer in the image is a **demo** placeholder (no Mapnik) — for real
-deployments point `tile_renderd_socket_addr` at an actual renderd and mount
-its tile directory; protocol and store layout are identical. Build knobs:
+The default renderer is a **demo** placeholder (no Mapnik). The real stack —
+the one from the offline map server guide — lives behind the `osm` profile:
+
+```sh
+./maps/download-demo-map.sh                       # maps/Baku.osm.pbf (~12 MB)
+docker compose --profile osm up -d --build
+docker compose logs -f import                     # osm2pgsql import (~1 min for Baku)
+# open http://localhost:8091/                     # Leaflet frontend
+# tiles render on demand: curl http://localhost:8091/tiles/12/2521/1341.png
+```
+
+| service (profile osm) | role |
+|---|---|
+| `db` | PostGIS 16 (docker.m.daocloud.io mirror, override `REGISTRY_MIRROR` in `.env`) |
+| `import` | one-shot osm2pgsql `--slim --hstore` + carto lua transform + `indexes.sql`/`functions.sql` + external land/water data |
+| `osm-renderd` | renderd + Mapnik + openstreetmap-carto v5.9.0 (compiled with carto from the CN npm mirror) |
+| `osm-tileserver` | ngx_mod_tile, layers parsed from renderd.conf via `tile_import_config`, Leaflet page at `/` |
+
+Verified end-to-end on Ubuntu 24.04: the import finishes in seconds for the
+Baku extract, and the rendered tiles show the full openstreetmap-carto style
+(road network, water bodies, place labels). For the fast path without the
+external land/ocean downloads (~600 MB), use `IMPORT_EXTERNAL=skip docker
+compose --profile osm up -d` — the corresponding layers are then omitted from
+the style (ocean areas show the map background colour instead).
+
+The stack renders a real map on the first request (Baku centre at zoom 12 is
+a 31 KB PNG). Restart `osm-renderd` after finishing the external data import
+to restore the land/ocean layers if you previously used the skip mode.
+
+All source fetches default to CN mirrors: apt → `mirrors.cloud.tencent.com`,
+npm/cartotool → `registry.npmmirror.com`, Leaflet → npmmirror tarball,
+PostGIS image → `docker.m.daocloud.io`. The openstreetmap-carto repo is
+cloned on the HOST by `docker/prepare-renderd.sh` (github is not reachable
+from inside the container); override `GH_PROXY` if needed. Map data source
+default is BBBike because download.geofabrik.de is blocked here. Build knobs:
 the Dockerfile exports all `NGX_TILE_WITH_*` switches; `DEMO_RENDERD=external`
 on the tileserver disables its embedded renderer (compose sets this).
 
