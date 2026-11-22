@@ -58,3 +58,8 @@ build/
 
 # python
 *.pyc
+maps/*.pbf
+maps/*.md5
+maps/*.complete
+.osm-carto/
+*.pbfdocker/leaflet.tgz
