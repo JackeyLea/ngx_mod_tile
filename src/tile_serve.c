@@ -390,14 +390,22 @@ ngx_http_tile_check_state(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx,
     rc = ngx_http_tile_send_response(r, ctx);
 
     /* fresh counters, port of the storage_hook tail: cmdDone ->
-     * FRESH_RENDER regardless of the previous state; a timeout or notDone
-     * keeps the stale-served counter for old/veryold tiles */
-    if (render_rc == NGX_TILE_CONN_DONE) {
+     * FRESH_RENDER regardless of the previous state. On a lost reply or
+     * timeout the tile may still have been rendered by renderd: a re-stat
+     * finding it current counts as a render too; a still-missing tile is
+     * a 404 with no fresh counter (upstream counts nothing there). */
+    if (render_rc == NGX_TILE_CONN_DONE
+        || (previous == ngx_tile_missing
+            && ctx->tile_state == ngx_tile_current))
+    {
         ctx->fresh_code = NGX_TILE_FRESH_RENDER;
     } else if (previous == ngx_tile_old) {
         ctx->fresh_code = NGX_TILE_OLD_RENDER;
     } else if (previous == ngx_tile_very_old) {
         ctx->fresh_code = NGX_TILE_VERYOLD_RENDER;
+    } else if (previous == ngx_tile_missing) {
+        /* still missing after the render attempt: 404, not counted */
+        ctx->fresh_code = 0;
     } else {
         ctx->fresh_code = NGX_TILE_FRESH;
     }

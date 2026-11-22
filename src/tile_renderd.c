@@ -415,6 +415,12 @@ ngx_http_tile_conn_reply_read(ngx_http_tile_conn_t *tc)
             continue;
         }
 
+        /* right after a non-blocking TCP connect the socket can still
+         * report EINPROGRESS on the first read: keep waiting */
+        if (n < 0 && ngx_socket_errno == NGX_EINPROGRESS) {
+            return NGX_OK;
+        }
+
         err = ngx_socket_errno;
 
         ngx_log_error(NGX_LOG_INFO, c->log, (n < 0) ? err : 0,

@@ -279,7 +279,7 @@ ngx_int_t ngx_http_tile_thread_stat(ngx_http_request_t *r,
     ngx_http_tile_ctx_t *ctx);
 ngx_int_t ngx_http_tile_thread_read(ngx_http_request_t *r,
     ngx_http_tile_ctx_t *ctx);
-void ngx_http_tile_thread_resume(ngx_http_request_t *r);
+ngx_int_t ngx_http_tile_thread_resume(ngx_http_request_t *r, ngx_uint_t stage);
 
 /* tile_store.c: per-thread store cache for the thread pool path */
 struct storage_backend *ngx_http_tile_get_store_thread(

@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1
+
+# ############################################################################
+# builder: compile nginx with ngx_http_tile_module and all optional stores
+# ############################################################################
+FROM ubuntu:24.04 AS builder
+
+ARG NGINX_VERSION=1.30.7
+# enable every optional storage backend that has dev libs installed below
+ENV NGX_TILE_WITH_MEMCACHED=yes \
+    NGX_TILE_WITH_RADOS=yes \
+    NGX_TILE_WITH_RO_HTTP_PROXY=yes \
+    NGX_TILE_WITH_COMPOSITE=yes
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential wget ca-certificates \
+        libpcre2-dev zlib1g-dev libssl-dev \
+        libcurl4-openssl-dev libmemcached-dev librados-dev libcairo2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN wget -q https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz \
+    && tar xzf nginx-${NGINX_VERSION}.tar.gz
+
+COPY LICENSE /src/LICENSE
+COPY config /src/config
+COPY src /src/src
+COPY vendor /src/vendor
+
+WORKDIR /build/nginx-${NGINX_VERSION}
+RUN ./configure \
+        --prefix=/usr/local/nginx \
+        --with-compat --with-threads \
+        --with-http_ssl_module --with-http_v2_module \
+        --add-dynamic-module=/src \
+    && make -j"$(nproc)" && make install \
+    && ls -l /usr/local/nginx/modules/
+
+# ############################################################################
+# runtime: only the shared libraries the binary and module need
+# ############################################################################
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpcre2-8-0 zlib1g libssl3t64 \
+        libcurl4 libmemcached11 librados2 libcairo2 \
+        python3 curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/nginx /usr/local/nginx
+COPY docker/nginx.conf /etc/nginx/nginx.conf
+COPY docker/demo_renderd.py /opt/demo/demo_renderd.py
+COPY docker/docker-entrypoint.sh /entrypoint.sh
+COPY tests/gen_metatiles.py /opt/demo/gen_metatiles.py
+
+ENV TILE_DIR=/data/tiles \
+    DEMO_RENDERD=internal
+
+RUN mkdir -p /data/tiles /var/log/nginx /var/cache/nginx \
+    && chmod +x /entrypoint.sh /usr/local/nginx/sbin/nginx
+
+EXPOSE 8080 7654
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s \
+    CMD curl -sf http://localhost:8080/healthz || exit 1
+
+ENTRYPOINT ["/entrypoint.sh"]

@@ -192,6 +192,39 @@ startup when a network URI is configured without a pool.
 | Stats / throttling | built-in, global fill-up pass over 100k slots | stage 2: shm zones, per-slot lazy refill, immediate 503 (no `sleep(3)`), config-based whitelist |
 | renderd protocol | v2/v3 | v2/v3 — **drop-in compatible with an existing renderd and tile store** |
 
+## Docker
+
+One-command build + run (multi-stage image: nginx + module compiled with
+every optional store; demo tile store generated on first start):
+
+```sh
+docker compose up -d --build
+```
+
+The stack mirrors the real architecture — nginx talks to a renderer over
+TCP and reads tiles from a shared volume:
+
+| service | role |
+|---|---|
+| `tileserver` | nginx + `ngx_http_tile_module` (all storage backends compiled) |
+| `renderd` | demo renderer speaking the real mod_tile protocol on `renderd:7654`, writes metatiles to the `tiles` volume |
+
+Try it:
+
+```sh
+curl http://localhost:8090/tiles/3/1/1.png            # fresh hit from the demo store
+curl http://localhost:8090/tiles/7/9/9.png            # miss -> demo renderd renders -> 200
+curl http://localhost:8090/styles/day/6/32/32.png     # style parameterization
+curl http://localhost:8090/mod_tile                   # text counters
+curl http://localhost:8090/metrics                    # Prometheus
+```
+
+The renderer in the image is a **demo** placeholder (no Mapnik) — for real
+deployments point `tile_renderd_socket_addr` at an actual renderd and mount
+its tile directory; protocol and store layout are identical. Build knobs:
+the Dockerfile exports all `NGX_TILE_WITH_*` switches; `DEMO_RENDERD=external`
+on the tileserver disables its embedded renderer (compose sets this).
+
 ## Testing
 
 ```sh

@@ -88,13 +88,16 @@ def write_metatile(base, xml, z, mx, my, payloads, gz=False, options=None):
 
 def main():
     base = sys.argv[1] if len(sys.argv) > 1 else "/tmp/tilestore"
-    os.makedirs(os.path.join(base, "test"), exist_ok=True)
-    os.makedirs(os.path.join(base, "osmtest"), exist_ok=True)
+    layer = sys.argv[2] if len(sys.argv) > 2 else "test"
+    layer2 = sys.argv[3] if len(sys.argv) > 3 else "osmtest"
+
+    os.makedirs(os.path.join(base, layer), exist_ok=True)
+    os.makedirs(os.path.join(base, layer2), exist_ok=True)
 
     # planet-import-complete: present and recent (tiles older than it expire)
-    with open(os.path.join(base, "test", "planet-import-complete"), "w"):
+    with open(os.path.join(base, layer, "planet-import-complete"), "w"):
         pass
-    os.utime(os.path.join(base, "test", "planet-import-complete"), None)
+    os.utime(os.path.join(base, layer, "planet-import-complete"), None)
 
     now = time.time()
 
@@ -106,34 +109,34 @@ def main():
                 for dy in range(METATILE):
                     for dx in range(METATILE):
                         payloads[(dx, dy)] = tile_png(z, mx * 8 + dx, my * 8 + dy)
-                write_metatile(base, "test", z, mx * 8, my * 8, payloads)
+                write_metatile(base, layer, z, mx * 8, my * 8, payloads)
 
     # --- compressed (METZ) metatile at origin (64,64) ---
     payloads = {}
     for dy in range(METATILE):
         for dx in range(METATILE):
             payloads[(dx, dy)] = gzip.compress(tile_png(7, 64 + dx, 64 + dy))
-    write_metatile(base, "test", 7, 64, 64, payloads, gz=True)
+    write_metatile(base, layer, 7, 64, 64, payloads, gz=True)
 
     # --- old tile: expired 100 days ago (older than planet time, <365d) ---
     payloads = {(dx, dy): tile_png(8, 64 + dx, 64 + dy) for dy in range(8) for dx in range(8)}
-    write_metatile(base, "test", 8, 64, 64, payloads)
-    os.utime(meta_path(base, "test", 8, 64, 64), (now - 100 * 86400, now - 100 * 86400))
+    write_metatile(base, layer, 8, 64, 64, payloads)
+    os.utime(meta_path(base, layer, 8, 64, 64), (now - 100 * 86400, now - 100 * 86400))
 
     # --- very old tile: 400 days ago ---
     payloads = {(dx, dy): tile_png(9, 64 + dx, 64 + dy) for dy in range(8) for dx in range(8)}
-    write_metatile(base, "test", 9, 64, 64, payloads)
-    os.utime(meta_path(base, "test", 9, 64, 64), (now - 400 * 86400, now - 400 * 86400))
+    write_metatile(base, layer, 9, 64, 64, payloads)
+    os.utime(meta_path(base, layer, 9, 64, 64), (now - 400 * 86400, now - 400 * 86400))
 
     # --- style-parameterized (options) tile: z6 origin (32,32) options "day" ---
     payloads = {}
     for dy in range(METATILE):
         for dx in range(METATILE):
             payloads[(dx, dy)] = tile_png(6, 32 + dx, 32 + dy, style="day")
-    write_metatile(base, "test", 6, 32, 32, payloads, options="day")
+    write_metatile(base, layer, 6, 32, 32, payloads, options="day")
 
     # --- second layer for the renderd.conf import test ---
-    with open(os.path.join(base, "osmtest", "planet-import-complete"), "w"):
+    with open(os.path.join(base, layer2, "planet-import-complete"), "w"):
         pass
     for z in range(0, 3):
         for mx in range(0, 2):
@@ -142,7 +145,7 @@ def main():
                 for dy in range(METATILE):
                     for dx in range(METATILE):
                         payloads[(dx, dy)] = tile_png(z, mx * 8 + dx, my * 8 + dy)
-                write_metatile(base, "osmtest", z, mx * 8, my * 8, payloads)
+                write_metatile(base, layer2, z, mx * 8, my * 8, payloads)
 
     print("tile store generated at %s" % base)
 

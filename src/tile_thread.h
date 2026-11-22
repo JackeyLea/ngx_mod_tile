@@ -30,6 +30,7 @@ ngx_int_t ngx_http_tile_thread_stat(ngx_http_request_t *r,
     ngx_http_tile_ctx_t *ctx);
 ngx_int_t ngx_http_tile_thread_read(ngx_http_request_t *r,
     ngx_http_tile_ctx_t *ctx);
-void ngx_http_tile_thread_resume(ngx_http_request_t *r);
+ngx_int_t ngx_http_tile_thread_resume(ngx_http_request_t *r,
+    ngx_uint_t stage);
 
 #endif /* NGX_TILE_THREAD_H */

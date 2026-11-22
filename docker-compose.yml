@@ -1,0 +1,57 @@
+# ngx_mod_tile demo stack: nginx (with the tile module) + a demo renderer.
+#
+#   docker compose up -d --build
+#   curl http://localhost:8090/tiles/3/1/1.png        # fresh hit
+#   curl http://localhost:8090/tiles/7/9/9.png        # missing -> demo renderd renders -> 200
+#   curl http://localhost:8090/styles/day/6/32/32.png # style parameterization
+#   curl http://localhost:8090/metrics                # Prometheus counters
+#
+# For production, replace the demo renderer with a real renderd (Mapnik):
+# same protocol, point tile_renderd_socket_addr at it.
+
+services:
+  renderd:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: ngx-mod-tile:latest
+    entrypoint: ["python3", "/opt/demo/demo_renderd.py",
+                 "--host", "0.0.0.0", "--port", "7654",
+                 "--tile-dir", "/data/tiles", "--log", "/tmp/renderd.log"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import socket; socket.create_connection((\"localhost\", 7654), 2)'"]
+      interval: 10s
+      timeout: 3s
+    environment:
+      TILE_DIR: /data/tiles
+    volumes:
+      - tiles:/data/tiles
+    networks:
+      tile:
+        aliases:
+          - renderd
+    restart: unless-stopped
+
+  tileserver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: ngx-mod-tile:latest
+    environment:
+      DEMO_RENDERD: external
+      TILE_DIR: /data/tiles
+    volumes:
+      - tiles:/data/tiles
+    ports:
+      - "8090:8080"
+    depends_on:
+      - renderd
+    networks:
+      - tile
+    restart: unless-stopped
+
+networks:
+  tile: {}
+
+volumes:
+  tiles: {}
