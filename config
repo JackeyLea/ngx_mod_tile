@@ -1,0 +1,79 @@
+ngx_addon_name=ngx_http_tile_module
+
+if test -n "$ngx_module_link"; then
+
+    ngx_module_type=HTTP
+    ngx_module_name=ngx_http_tile_module
+    ngx_module_incs="$ngx_addon_dir/src $ngx_addon_dir/vendor"
+    ngx_module_deps="$ngx_addon_dir/src/ngx_mod_tile.h \
+                      $ngx_addon_dir/src/tile_config.h \
+                      $ngx_addon_dir/src/tile_store.h \
+                      $ngx_addon_dir/src/tile_renderd.h \
+                      $ngx_addon_dir/src/tile_serve.h \
+                      $ngx_addon_dir/src/tile_response.h \
+                      $ngx_addon_dir/src/tile_endpoints.h \
+                      $ngx_addon_dir/vendor/tile_compat.h \
+                      $ngx_addon_dir/vendor/g_logger.h \
+                      $ngx_addon_dir/vendor/protocol.h \
+                      $ngx_addon_dir/vendor/store.h \
+                      $ngx_addon_dir/vendor/store_file.h \
+                      $ngx_addon_dir/vendor/store_file_utils.h \
+                      $ngx_addon_dir/vendor/store_null.h \
+                      $ngx_addon_dir/vendor/metatile.h \
+                      $ngx_addon_dir/vendor/render_config.h \
+                      $ngx_addon_dir/vendor/sys_utils.h \
+                      $ngx_addon_dir/vendor/dictionary.h \
+                      $ngx_addon_dir/vendor/iniparser.h"
+    ngx_module_srcs="$ngx_addon_dir/src/ngx_mod_tile.c \
+                      $ngx_addon_dir/src/tile_config.c \
+                      $ngx_addon_dir/src/tile_store.c \
+                      $ngx_addon_dir/src/tile_renderd.c \
+                      $ngx_addon_dir/src/tile_serve.c \
+                      $ngx_addon_dir/src/tile_response.c \
+                      $ngx_addon_dir/src/tile_endpoints.c \
+                      $ngx_addon_dir/vendor/store.c \
+                      $ngx_addon_dir/vendor/store_file.c \
+                      $ngx_addon_dir/vendor/store_file_utils.c \
+                      $ngx_addon_dir/vendor/store_null.c \
+                      $ngx_addon_dir/vendor/sys_utils.c \
+                      $ngx_addon_dir/vendor/g_logger_ngx.c \
+                      $ngx_addon_dir/vendor/iniparser.c \
+                      $ngx_addon_dir/vendor/dictionary.c"
+    ngx_module_libs=
+
+    . auto/module
+
+else
+
+    ngx_module_type=HTTP
+    ngx_module_name=ngx_http_tile_module
+
+    # static build fallback (--add-module)
+    HTTP_MODULES="$HTTP_MODULES ngx_http_tile_module"
+    NGX_ADDON_SRCS="$NGX_ADDON_SRCS \
+                    $ngx_addon_dir/src/ngx_mod_tile.c \
+                    $ngx_addon_dir/src/tile_config.c \
+                    $ngx_addon_dir/src/tile_store.c \
+                    $ngx_addon_dir/src/tile_renderd.c \
+                    $ngx_addon_dir/src/tile_serve.c \
+                    $ngx_addon_dir/src/tile_response.c \
+                    $ngx_addon_dir/src/tile_endpoints.c \
+                    $ngx_addon_dir/vendor/store.c \
+                    $ngx_addon_dir/vendor/store_file.c \
+                    $ngx_addon_dir/vendor/store_file_utils.c \
+                    $ngx_addon_dir/vendor/store_null.c \
+                    $ngx_addon_dir/vendor/sys_utils.c \
+                    $ngx_addon_dir/vendor/g_logger_ngx.c \
+                    $ngx_addon_dir/vendor/iniparser.c \
+                    $ngx_addon_dir/vendor/dictionary.c"
+    HTTP_INCS="$HTTP_INCS $ngx_addon_dir/src $ngx_addon_dir/vendor"
+    NGX_ADDON_DEPS="$NGX_ADDON_DEPS \
+                    $ngx_addon_dir/src/ngx_mod_tile.h \
+                    $ngx_addon_dir/src/tile_config.h \
+                    $ngx_addon_dir/src/tile_store.h \
+                    $ngx_addon_dir/src/tile_renderd.h \
+                    $ngx_addon_dir/src/tile_serve.h \
+                    $ngx_addon_dir/src/tile_response.h \
+                    $ngx_addon_dir/src/tile_endpoints.h"
+
+fi
