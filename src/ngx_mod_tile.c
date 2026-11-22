@@ -108,6 +108,23 @@ ngx_http_tile_init(ngx_conf_t *cf)
         if ((ngx_uint_t) layer->maxzoom > mcf->global_max_zoom) {
             mcf->global_max_zoom = (ngx_uint_t) layer->maxzoom;
         }
+
+        /* network-backed stores block: warn when no thread pool offloads them */
+        if (layer->store_uri.len > 12
+            && (ngx_strncasecmp(layer->store_uri.data,
+                                (u_char *) "memcached://", 12) == 0
+                || ngx_strncasecmp(layer->store_uri.data,
+                                   (u_char *) "rados://", 8) == 0
+                || ngx_strncasecmp(layer->store_uri.data,
+                                   (u_char *) "ro_http_proxy://", 16) == 0
+                || ngx_strncasecmp(layer->store_uri.data,
+                                   (u_char *) "composite:{", 11) == 0))
+        {
+            ngx_log_error(NGX_LOG_WARN, cf->cycle->log, 0,
+                          "tile: layer %V uses a blocking network store; "
+                          "configure tile_thread_pool to offload it, or the "
+                          "worker will stall on I/O", &layer->xmlname);
+        }
     }
 
     if (mcf->global_max_zoom > NGX_TILE_MAX_ZOOM_SERVER) {

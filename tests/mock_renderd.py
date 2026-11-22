@@ -68,7 +68,10 @@ class Proto:
 
 
 def simulate_render(req, render_dir):
-    """Write the requested tile as a metatile, like renderd would."""
+    """Write the requested tile as a metatile, like renderd would.
+
+    Non-empty style options use the upstream alternate filename
+    `<h0>.<options>.meta` (store_file_utils.c xyzo_to_meta)."""
     z, x, y = req.z, req.x, req.y
     if z < 0 or x < 0 or y < 0:
         return
@@ -76,8 +79,10 @@ def simulate_render(req, render_dir):
     payloads = {}
     for dy in range(8):
         for dx in range(8):
-            payloads[(dx, dy)] = tile_png(z, ox + dx, oy + dy)
-    write_metatile(render_dir, req.xmlname, z, ox, oy, payloads)
+            payloads[(dx, dy)] = tile_png(z, ox + dx, oy + dy,
+                                          style=req.options or None)
+    write_metatile(render_dir, req.xmlname, z, ox, oy, payloads,
+                   options=req.options or None)
 
 
 async def handle(reader, writer, args):

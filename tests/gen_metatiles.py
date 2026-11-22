@@ -18,8 +18,11 @@ import zlib
 METATILE = 8
 
 
-def tile_png(z, x, y):
-    """Minimal deterministic 1x1 PNG whose RGB encodes z/x/y (stable bytes)."""
+def tile_png(z, x, y, style=None):
+    """Minimal deterministic 1x1 PNG whose RGB encodes z/x/y (stable bytes).
+
+    `style` shifts the palette so parameterized variants differ."""
+    x = (x + (7 * len(style) if style else 0)) & 0x7FFFFFFF
     def chunk(ctype, data):
         c = ctype + data
         return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
@@ -33,8 +36,11 @@ def tile_png(z, x, y):
             + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
 
 
-def meta_path(base, xml, z, ox, oy, gz=False):
-    """ox/oy are the metatile ORIGIN tile coordinates (multiples of 8)."""
+def meta_path(base, xml, z, ox, oy, gz=False, options=None):
+    """ox/oy are the metatile ORIGIN tile coordinates (multiples of 8).
+
+    With style options the filename becomes `<h0>.<options>.meta` (upstream
+    xyzo_to_meta prints the hash bytes in DECIMAL)."""
     x, y = ox, oy
     hash_bits = []
     for _ in range(5):
@@ -42,16 +48,19 @@ def meta_path(base, xml, z, ox, oy, gz=False):
         x >>= 4
         y >>= 4
     # upstream xyzo_to_meta prints the hash bytes in DECIMAL (%u)
-    name = "%d.meta" % hash_bits[0]
+    if options:
+        name = "%d.%s.meta" % (hash_bits[0], options)
+    else:
+        name = "%d.meta" % hash_bits[0]
     return os.path.join(base, xml, str(z),
                         "%d" % hash_bits[4], "%d" % hash_bits[3],
                         "%d" % hash_bits[2], "%d" % hash_bits[1],
                         name)
 
 
-def write_metatile(base, xml, z, mx, my, payloads, gz=False):
+def write_metatile(base, xml, z, mx, my, payloads, gz=False, options=None):
     """payloads: dict {(dx, dy): bytes}"""
-    path = meta_path(base, xml, z, mx, my, gz)
+    path = meta_path(base, xml, z, mx, my, gz, options)
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     header_len = 20 + 64 * 8
@@ -115,6 +124,13 @@ def main():
     payloads = {(dx, dy): tile_png(9, 64 + dx, 64 + dy) for dy in range(8) for dx in range(8)}
     write_metatile(base, "test", 9, 64, 64, payloads)
     os.utime(meta_path(base, "test", 9, 64, 64), (now - 400 * 86400, now - 400 * 86400))
+
+    # --- style-parameterized (options) tile: z6 origin (32,32) options "day" ---
+    payloads = {}
+    for dy in range(METATILE):
+        for dx in range(METATILE):
+            payloads[(dx, dy)] = tile_png(6, 32 + dx, 32 + dy, style="day")
+    write_metatile(base, "test", 6, 32, 32, payloads, options="day")
 
     # --- second layer for the renderd.conf import test ---
     with open(os.path.join(base, "osmtest", "planet-import-complete"), "w"):

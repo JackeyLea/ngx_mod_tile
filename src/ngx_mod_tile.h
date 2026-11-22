@@ -114,6 +114,11 @@ typedef struct {
     struct storage_backend *store;
     ngx_uint_t              endpoint;  /* NGX_TILE_EP_* */
     ngx_uint_t              resp_status;   /* final status, for the counters */
+    ngx_uint_t              thread_stage;  /* NGX_TILE_THREAD_* offload state */
+    unsigned                stat_done:1;   /* stat_result populated */
+    void                   *thread_ctx;    /* ngx_http_tile_thread_t while pending */
+    ngx_pool_cleanup_t     *thread_cleanup;
+    struct stat_info        st_result; /* stat result from the thread task */
     unsigned                oob:1;     /* URI parsed but coordinates out of bounds */
     time_t                  mtime;     /* tile mtime from tile_stat (sec) */
     time_t                  atime;
@@ -177,6 +182,7 @@ typedef struct {
     ngx_int_t               throttle_xforward;        /* 0 off, 1 first XFF, 2 last XFF */
     ngx_flag_t              throttle_enabled;         /* tile_throttling on, default off */
     ngx_array_t            *throttle_whitelist;       /* in_addr_t, up to 13 */
+    ngx_thread_pool_t      *thread_pool;              /* tile_thread_pool, NULL = sync */
 } ngx_http_tile_loc_conf_t;
 
 /** @brief Shared storage-backend instance cached per worker. */
@@ -262,5 +268,22 @@ ngx_int_t ngx_http_tile_stats_page(ngx_http_request_t *r);
 ngx_int_t ngx_http_tile_metrics_page(ngx_http_request_t *r);
 ngx_int_t ngx_http_tile_delay_allowed(ngx_http_request_t *r,
     ngx_http_tile_loc_conf_t *tlcf, ngx_tile_state_e state);
+
+/* tile_thread.c (stage 3) */
+ngx_int_t ngx_http_tile_serve_flow_after_stat(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx);
+ngx_int_t ngx_http_tile_send_response_after_read(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx, u_char *buf, ssize_t len, int compressed,
+    const char *err_msg);
+ngx_int_t ngx_http_tile_thread_stat(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx);
+ngx_int_t ngx_http_tile_thread_read(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx);
+void ngx_http_tile_thread_resume(ngx_http_request_t *r);
+
+/* tile_store.c: per-thread store cache for the thread pool path */
+struct storage_backend *ngx_http_tile_get_store_thread(
+    ngx_http_tile_main_conf_t *mcf, ngx_str_t *store_uri, ngx_log_t *log);
+void ngx_http_tile_store_tls_destroy(void);
 
 #endif /* NGX_MOD_TILE_H */

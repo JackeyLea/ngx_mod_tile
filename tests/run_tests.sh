@@ -271,6 +271,37 @@ if [[ ${N503C:-0} -ge 1 ]]; then PASS=$((PASS+1)); echo "PASS: NoResp503 counted
 assert_contains "stats disabled message" "$(curl -s --max-time 4 http://127.0.0.1:18083/mod_tile)" "Stats are not enabled"
 
 
+
+echo "== phase 5: thread pool + style parameterization (stage 3) =="
+
+# thread pool path: fresh hit, byte-exact
+curl -s --max-time 6 "http://127.0.0.1:18084/tp/3/1/1.png" | md5sum | awk '{print $1}' > /tmp/got-tp.md5
+python3 -c "import sys; sys.path.insert(0,'$HERE'); from gen_metatiles import tile_png; sys.stdout.buffer.write(tile_png(3,1,1))" | md5sum | awk '{print $1}' > /tmp/want-tp-fresh.md5
+assert_eq "thread pool fresh hit bytes" "$(cat /tmp/got-tp.md5)" "$(cat /tmp/want-tp-fresh.md5)"
+
+# thread pool path: missing tile rendered on demand through the pool
+MS=$(curl -s -o /tmp/miss-tp -w '%{http_code}' --max-time 6 "http://127.0.0.1:18084/tp/7/7/7.png")
+assert_status "thread pool on-demand render 200" "http://127.0.0.1:18084/tp/7/7/7.png" 200
+python3 -c "import sys; sys.path.insert(0,'$HERE'); from gen_metatiles import tile_png; sys.stdout.buffer.write(tile_png(7,7,7))" | md5sum | awk '{print $1}' > /tmp/want-tp.md5
+assert_eq "thread pool rendered content" "$(md5sum /tmp/miss-tp | awk '{print $1}')" "$(cat /tmp/want-tp.md5)"
+
+# thread pool: 304 still works
+TETAG=$(curl -sI --max-time 4 "http://127.0.0.1:18084/tp/3/1/1.png" | tr -d '\r' | awk 'tolower($1)=="etag:"{print $2}')
+assert_status "thread pool If-None-Match 304" "http://127.0.0.1:18084/tp/3/1/1.png" 304 -H "If-None-Match: $TETAG"
+
+# style parameterization: /opt/<style>/z/x/y.ext serves the options metatile
+curl -s --max-time 4 "http://127.0.0.1:18080/opt/day/6/32/32.png" | md5sum | awk '{print $1}' > /tmp/got-opt.md5
+python3 -c "import sys; sys.path.insert(0,'$HERE'); from gen_metatiles import tile_png; sys.stdout.buffer.write(tile_png(6,32,32,style='day'))" | md5sum | awk '{print $1}' > /tmp/want-opt.md5
+assert_eq "options metatile served" "$(cat /tmp/got-opt.md5)" "$(cat /tmp/want-opt.md5)"
+
+# missing options tile: mock renders into <h0>.<options>.meta and we serve it
+MS2=$(curl -s -o /tmp/miss-opt -w '%{http_code}' --max-time 6 "http://127.0.0.1:18080/opt/night/6/40/40.png")
+assert_status "missing options tile rendered 200" "http://127.0.0.1:18080/opt/night/6/40/40.png" 200
+assert_contains "mock received style options" "$(cat "$MOCK_LOG")" "opts=night"
+python3 -c "import sys; sys.path.insert(0,'$HERE'); from gen_metatiles import tile_png; sys.stdout.buffer.write(tile_png(6,40,40,style='night'))" | md5sum | awk '{print $1}' > /tmp/want-opt2.md5
+assert_eq "rendered options content" "$(md5sum /tmp/miss-opt | awk '{print $1}')" "$(cat /tmp/want-opt2.md5)"
+
+
 echo
 echo "================================"
 echo "PASS=$PASS FAIL=$FAIL"

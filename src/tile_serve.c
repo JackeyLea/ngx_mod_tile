@@ -31,6 +31,8 @@ static ngx_http_tile_ctx_t *ngx_http_tile_parse_uri(ngx_http_request_t *r,
     ngx_http_tile_layer_t *layer, const u_char *rest, size_t rest_len);
 static ngx_int_t ngx_http_tile_serve_flow(ngx_http_request_t *r,
     ngx_http_tile_ctx_t *ctx);
+static ngx_tile_state_e ngx_http_tile_classify(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx, struct stat_info st);
 static ngx_int_t ngx_http_tile_parse_int(const u_char *data, size_t len,
     int *dest);
 
@@ -332,14 +334,22 @@ ngx_http_tile_matcher(ngx_http_request_t *r)
 ngx_tile_state_e
 ngx_http_tile_stat_state(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
 {
-    ngx_http_tile_loc_conf_t *tlcf;
-    struct stat_info          st;
-
-    tlcf = ngx_http_get_module_loc_conf(r, ngx_http_tile_module);
+    struct stat_info st;
 
     st = ctx->store->tile_stat(ctx->store, (const char *) ctx->cmd.xmlname,
                                (const char *) ctx->cmd.options, ctx->cmd.x,
                                ctx->cmd.y, ctx->cmd.z);
+
+    return ngx_http_tile_classify(r, ctx, st);
+}
+
+static ngx_tile_state_e
+ngx_http_tile_classify(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx,
+    struct stat_info st)
+{
+    ngx_http_tile_loc_conf_t *tlcf;
+
+    tlcf = ngx_http_get_module_loc_conf(r, ngx_http_tile_module);
 
     ctx->mtime = st.mtime;
     ctx->atime = st.atime;
@@ -453,6 +463,31 @@ static ngx_int_t
 ngx_http_tile_serve_flow(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
 {
     ngx_http_tile_loc_conf_t *tlcf;
+
+    tlcf = ngx_http_get_module_loc_conf(r, ngx_http_tile_module);
+
+    ctx->head_only = (r->method == NGX_HTTP_HEAD);
+
+    /* stage 3: offload the (possibly blocking) stat to the thread pool */
+    if (tlcf->thread_pool != NULL && !ctx->stat_done) {
+        return ngx_http_tile_thread_stat(r, ctx);
+    }
+
+    if (!ctx->stat_done) {
+        struct stat_info st = ctx->store->tile_stat(
+            ctx->store, (const char *) ctx->cmd.xmlname,
+            (const char *) ctx->cmd.options, ctx->cmd.x, ctx->cmd.y, ctx->cmd.z);
+        ctx->st_result = st;
+    }
+
+    return ngx_http_tile_serve_flow_after_stat(r, ctx);
+}
+
+ngx_int_t
+ngx_http_tile_serve_flow_after_stat(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx)
+{
+    ngx_http_tile_loc_conf_t *tlcf;
     ngx_http_tile_main_conf_t *mcf;
     struct protocol           dirty_cmd;
     double                    avg;
@@ -461,8 +496,8 @@ ngx_http_tile_serve_flow(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
     tlcf = ngx_http_get_module_loc_conf(r, ngx_http_tile_module);
     mcf = ngx_http_get_module_main_conf(r, ngx_http_tile_module);
 
-    ctx->tile_state = ngx_http_tile_stat_state(r, ctx);
-    ctx->head_only = (r->method == NGX_HTTP_HEAD);
+    ctx->stat_done = 1;
+    ctx->tile_state = ngx_http_tile_classify(r, ctx, ctx->st_result);
 
     /* per-IP throttle, port of the storage_hook delaypool gate */
     if (tlcf->throttle_enabled && mcf->delaypool != NULL

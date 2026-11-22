@@ -14,6 +14,7 @@ if test -n "$ngx_module_link"; then
                       $ngx_addon_dir/src/tile_endpoints.h \
                       $ngx_addon_dir/src/tile_stats.h \
                       $ngx_addon_dir/src/tile_delaypool.h \
+                    $ngx_addon_dir/src/tile_thread.h \
                       $ngx_addon_dir/src/tile_stats_shm.h \
                       $ngx_addon_dir/src/tile_delaypool_shm.h \
                       $ngx_addon_dir/vendor/tile_compat.h \
@@ -37,6 +38,7 @@ if test -n "$ngx_module_link"; then
                       $ngx_addon_dir/src/tile_endpoints.c \
                       $ngx_addon_dir/src/tile_stats.c \
                       $ngx_addon_dir/src/tile_delaypool.c \
+                    $ngx_addon_dir/src/tile_thread.c \
                       $ngx_addon_dir/vendor/store.c \
                       $ngx_addon_dir/vendor/store_file.c \
                       $ngx_addon_dir/vendor/store_file_utils.c \
@@ -45,7 +47,38 @@ if test -n "$ngx_module_link"; then
                       $ngx_addon_dir/vendor/g_logger_ngx.c \
                       $ngx_addon_dir/vendor/iniparser.c \
                       $ngx_addon_dir/vendor/dictionary.c"
-    ngx_module_libs=
+    # optional storage backends, enabled at configure time with env vars:
+    #   NGX_TILE_WITH_MEMCACHED=yes    (needs libmemcached-dev)
+    #   NGX_TILE_WITH_RADOS=yes        (needs librados-dev / ceph)
+    #   NGX_TILE_WITH_RO_HTTP_PROXY=yes (needs libcurl-dev)
+    #   NGX_TILE_WITH_COMPOSITE=yes    (needs libcairo-dev)
+    ngx_tile_libs=""
+
+    if [ "$NGX_TILE_WITH_MEMCACHED" = yes ]; then
+        have=NGX_TILE_WITH_MEMCACHED . auto/have
+        ngx_tile_libs="$ngx_tile_libs -lmemcached"
+        echo " + ngx_mod_tile: memcached storage backend enabled"
+    fi
+
+    if [ "$NGX_TILE_WITH_RADOS" = yes ]; then
+        have=NGX_TILE_WITH_RADOS . auto/have
+        ngx_tile_libs="$ngx_tile_libs -lrados"
+        echo " + ngx_mod_tile: rados storage backend enabled"
+    fi
+
+    if [ "$NGX_TILE_WITH_RO_HTTP_PROXY" = yes ]; then
+        have=NGX_TILE_WITH_RO_HTTP_PROXY . auto/have
+        ngx_tile_libs="$ngx_tile_libs -lcurl"
+        echo " + ngx_mod_tile: ro_http_proxy storage backend enabled"
+    fi
+
+    if [ "$NGX_TILE_WITH_COMPOSITE" = yes ]; then
+        have=NGX_TILE_WITH_COMPOSITE . auto/have
+        ngx_tile_libs="$ngx_tile_libs -lcairo"
+        echo " + ngx_mod_tile: ro_composite storage backend enabled"
+    fi
+
+    ngx_module_libs="$ngx_tile_libs"
 
     . auto/module
 
@@ -66,6 +99,7 @@ else
                     $ngx_addon_dir/src/tile_endpoints.c \
                     $ngx_addon_dir/src/tile_stats.c \
                     $ngx_addon_dir/src/tile_delaypool.c \
+                    $ngx_addon_dir/src/tile_thread.c \
                     $ngx_addon_dir/vendor/store.c \
                     $ngx_addon_dir/vendor/store_file.c \
                     $ngx_addon_dir/vendor/store_file_utils.c \

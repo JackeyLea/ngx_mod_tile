@@ -43,6 +43,8 @@ static char *ngx_http_tile_throttle_whitelist_directive(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
 static char *ngx_http_tile_throttle_xforward_directive(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
+static char *ngx_http_tile_thread_pool_directive(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_tile_register_layer(ngx_conf_t *cf,
     ngx_http_tile_main_conf_t *mcf, ngx_http_tile_layer_t *layer);
 
@@ -295,6 +297,13 @@ ngx_command_t ngx_http_tile_commands[] = {
       ngx_conf_set_flag_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_tile_loc_conf_t, metrics_page),
+      NULL },
+
+    { ngx_string("tile_thread_pool"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_http_tile_thread_pool_directive,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      0,
       NULL },
 
     { ngx_string("tile_throttling"),
@@ -856,6 +865,30 @@ ngx_http_tile_throttle_xforward_directive(ngx_conf_t *cf, ngx_command_t *cmd,
     return NGX_CONF_OK;
 }
 
+static char *
+ngx_http_tile_thread_pool_directive(ngx_conf_t *cf, ngx_command_t *cmd,
+    void *conf)
+{
+    ngx_http_tile_loc_conf_t *tlcf = conf;
+    ngx_str_t                 *value = cf->args->elts;
+
+#if (NGX_THREADS)
+    if (tlcf->thread_pool != NULL) {
+        return "is duplicate";
+    }
+
+    tlcf->thread_pool = ngx_thread_pool_get(cf->cycle, &value[1]);
+    if (tlcf->thread_pool == NULL) {
+        return "unknown thread pool (define it with the thread_pool "
+               "directive, nginx must be built with --with-threads)";
+    }
+
+    return NGX_CONF_OK;
+#else
+    return "requires nginx built with --with-threads";
+#endif
+}
+
 static ngx_int_t
 ngx_http_tile_register_layer(ngx_conf_t *cf,
     ngx_http_tile_main_conf_t *mcf, ngx_http_tile_layer_t *layer)
@@ -913,7 +946,6 @@ ngx_http_tile_import_config(ngx_conf_t *cf, ngx_http_tile_loc_conf_t *tlcf)
     ngx_uint_t                n_sections, n, count = 0;
     const char               *section, *str;
     char                      key[512];
-    u_char                    buf[512];
     char                     *err;
 
     ini = iniparser_load((const char *) tlcf->import_config.data);
@@ -1078,16 +1110,12 @@ ngx_http_tile_import_config(ngx_conf_t *cf, ngx_http_tile_loc_conf_t *tlcf)
             return "tile_import_config: type must have at least 2 parts";
         }
 
-        /* parameterize_style enables /<options>/z/x/y.ext URLs */
+        /* parameterize_style enables /<options>/z/x/y.ext URLs; the options
+         * string is passed through to renderd in the v3 packet */
         TILE_INI_KEY("parameterize_style");
         str = iniparser_getstring(ini, key, "");
         if (str[0] != '\0') {
             layer->enable_options = 1;
-            (void) ngx_snprintf(buf, sizeof(buf), "parameterize_style \"%s\" is "
-                                "accepted but style parameterization is not "
-                                "supported by this build; URLs with options "
-                                "are parsed but options are ignored", str);
-            ngx_conf_log_error(NGX_LOG_WARN, cf, 0, (char *) buf);
         }
     }
 

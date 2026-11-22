@@ -18,8 +18,8 @@ them using nginx.
 - ✅ `tile-layer.json` (TileJSON 2.0.0), `/status`, `/dirty` endpoints
 - ✅ `tile_import_config` — reads `renderd.conf` `[map]` sections (iniparser)
 - ✅ **Stage 2**: shared-memory stats counters, `/mod_tile` stats page, `/metrics` (Prometheus), per-IP delaypool throttling with whitelist and X-Forwarded-For
-- ✅ Per-worker cached storage backends (`file`, `null`; memcached/rados/etc. in stage 3)
-- ⬜ Stage 3: memcached / rados / composite / ro_http_proxy stores, style parameterization
+- ✅ **Stage 3**: `tile_thread_pool` — tile_stat/tile_read offloaded to nginx thread pools (per-thread backend instances via pthread TLS), making the blocking network stores safe to use; style parameterization (`tile_options on`, options passed through in the v3 packet, options-aware metatile paths `<h0>.<options>.meta`)
+- ✅ Storage backends vendored with build-time switches: `file`/`null` (always), `memcached`/`rados`/`ro_http_proxy`/`composite` via `NGX_TILE_WITH_*` configure env vars
 
 ## Architecture
 
@@ -137,6 +137,20 @@ server {
     tile_throttling_whitelist 10.0.0.5;  # exempt, up to 13 IPv4 entries
     tile_throttling_xforward 0;          # 1 = first XFF entry, 2 = last
 
+    # stage 3: run blocking store I/O in a thread pool (nginx --with-threads;
+    # define the pool with nginx's own "thread_pool" directive first)
+    thread_pool default threads=4;
+    location /tiles/ {
+        tile_layer default;
+        tile_thread_pool default;
+    }
+
+    # stage 3: style parameterization URLs (options passed to renderd in v3)
+    location /osm/ {
+        tile_layer default;
+        tile_options on;                 # /osm/<style>/z/x/y.png[/status|/dirty]
+    }
+
     # endpoints handled inside every tile layer:
     #   /osm/z/x/y.png            tile
     #   /osm/z/x/y.png/status     freshness text
@@ -146,8 +160,23 @@ server {
 ```
 
 Storage backend is chosen by the `tile_tile_dir` / renderd.conf `tiledir`
-value: `/path` → file store, `null://` → blackhole. (`rados://`,
-`memcached://`, `composite:{...}`, `ro_http_proxy://` are wired in stage 3.)
+value: `/path` → file store, `null://` → blackhole, `memcached://`,
+`rados://`, `composite:{...}`, `ro_http_proxy://`. The network-backed stores
+are vendored verbatim but need their dev libraries at build time — enable
+them by exporting at configure:
+
+```sh
+NGX_TILE_WITH_MEMCACHED=yes   # -lmemcached
+NGX_TILE_WITH_RADOS=yes       # -lrados
+NGX_TILE_WITH_RO_HTTP_PROXY=yes  # -lcurl
+NGX_TILE_WITH_COMPOSITE=yes   # -lcairo (PNG blending)
+
+./configure --with-compat --with-threads --add-dynamic-module=/path/to/ngx_mod_tile ...
+```
+
+Backends without `tile_thread_pool` run blocking I/O in the event loop (fine
+for the file store, not for network stores) — the module logs a warning at
+startup when a network URI is configured without a pool.
 
 ## Semantics vs Apache mod_tile
 
@@ -178,7 +207,9 @@ renderd.conf-imported layer, TileJSON fields, /status texts, /dirty wire
 traffic, stale-tile serving with render submission, on-demand rendering with
 correct content, renderd-dead timeout paths, the async-concurrency proof, plus
 the stage 2 counters (/mod_tile fields, Prometheus families and labels), the
-per-IP throttle 503s with whitelist bypass, and the stats-disabled message.
+per-IP throttle 503s with whitelist bypass, the stats-disabled message, the
+thread-pool serving path (fresh/304/on-demand render), and style
+parameterization including options-aware render round-trips.
 
 ## License
 

@@ -451,16 +451,15 @@ ngx_http_tile_add_expiry(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
 ngx_int_t
 ngx_http_tile_send_response(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
 {
+    ngx_http_tile_loc_conf_t *tlcf;
     u_char                    *buf;
     char                       err_msg[1024];
     int                        compressed = 0;
     ssize_t                    len;
-    u_char                     digest[16], hex[32], etag_buf[34];
-    ngx_md5_t                  md5;
-    ngx_str_t                 *accept_enc;
-    ngx_table_elt_t           *h;
-    ngx_int_t                  rc;
     struct timeval             tv_start, tv_end;
+    ngx_int_t                  rc;
+
+    tlcf = ngx_http_get_module_loc_conf(r, ngx_http_tile_module);
 
     if (ctx->layer->cors.len != 0) {
         rc = ngx_http_tile_cors(r, &ctx->layer->cors);
@@ -480,8 +479,15 @@ ngx_http_tile_send_response(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
         }
     }
 
+    /* stage 3: offload the (possibly blocking) read to the thread pool */
+    if (tlcf->thread_pool != NULL) {
+        return ngx_http_tile_thread_read(r, ctx);
+    }
+
     buf = ngx_palloc(r->pool, MAX_SIZE);
     if (buf == NULL) {
+        ctx->resp_status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        ngx_http_tile_stats_response(r, ctx, NGX_HTTP_INTERNAL_SERVER_ERROR);
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -498,6 +504,21 @@ ngx_http_tile_send_response(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
     ngx_http_tile_stats_timing(r, ctx,
         (tv_end.tv_sec - tv_start.tv_sec) * 1000000
         + (tv_end.tv_usec - tv_start.tv_usec));
+
+    return ngx_http_tile_send_response_after_read(r, ctx, buf, len,
+                                                  compressed, err_msg);
+}
+
+ngx_int_t
+ngx_http_tile_send_response_after_read(ngx_http_request_t *r,
+    ngx_http_tile_ctx_t *ctx, u_char *buf, ssize_t len, int compressed,
+    const char *err_msg)
+{
+    u_char                     digest[16], hex[32], etag_buf[34];
+    ngx_md5_t                  md5;
+    ngx_str_t                 *accept_enc;
+    ngx_table_elt_t           *h;
+    ngx_int_t                  rc;
 
     if (len <= 0) {
         ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
