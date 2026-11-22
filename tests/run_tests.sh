@@ -234,6 +234,43 @@ start_mock --mode done --delay 0.4 --render-dir "$BASE"
 python3 "$HERE/async_test.py" "$BASE_URL" && PASS=$((PASS+2)) || { FAIL=$((FAIL+1)); FAILED_TESTS+=("async concurrency"); }
 echo "PASS: async concurrency test completed"
 
+
+echo "== phase 4: stats, metrics, throttling (stage 2) =="
+
+# counters on the main server (zone-wide; previous phases already produced traffic)
+M=$(curl -s --max-time 4 "$BASE_URL/mod_tile")
+assert_contains "mod_tile NoResp200 present" "$M" "NoResp200: "
+assert_contains "mod_tile layer counter" "$M" "NoRes200Layer/tiles/"
+assert_contains "mod_tile zoom counter" "$M" "NoRespZoom"
+assert_contains "mod_tile timing counter" "$M" "DurationTileBufferReads"
+
+MX=$(curl -s --max-time 4 "$BASE_URL/metrics")
+assert_contains "metrics responses family" "$MX" 'modtile_http_responses_total{status="200"}'
+assert_contains "metrics 304 family" "$MX" 'modtile_http_responses_total{status="304"}'
+assert_contains "metrics tiles family" "$MX" 'modtile_tiles_total{age="fresh",rendered="no"}'
+assert_contains "metrics render family" "$MX" 'modtile_tiles_total{age="fresh",rendered="yes"}'
+assert_contains "metrics reads seconds" "$MX" 'modtile_tile_reads_seconds_total{zoom="05"}'
+assert_contains "metrics layer label" "$MX" 'modtile_layer_responses_total{layer="/tiles/",status="200"}'
+
+# per-IP throttling: bucket of 5 tiles, refill 1 per 2s -> rapid requests hit 503
+CODES=$(for i in $(seq 0 7); do curl -s -o /dev/null -w '%{http_code}\n' --max-time 4 "http://127.0.0.1:18081/t8/3/$i/0.png"; done)
+N503=$(echo "$CODES" | grep -c 503 || true)
+N200=$(echo "$CODES" | grep -c 200 || true)
+if [[ $N503 -ge 1 && $N200 -ge 1 ]]; then PASS=$((PASS+1)); echo "PASS: throttling mixed 200/503 ($N200 ok, $N503 throttled)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("throttle"); echo "FAIL: throttling ($N200 ok, $N503 throttled): $CODES"; fi
+
+# whitelisted client bypasses the throttle entirely
+W503=$(for i in $(seq 0 7); do curl -s -o /dev/null -w '%{http_code}\n' --max-time 4 "http://127.0.0.1:18082/t8/3/$i/0.png"; done | grep -c 503 || true)
+assert_eq "whitelist bypasses throttle" "$W503" "0"
+
+# 503s show up in the global counters
+M2=$(curl -s --max-time 4 "$BASE_URL/mod_tile")
+N503C=$(echo "$M2" | awk '/^NoResp503:/{print $2}')
+if [[ ${N503C:-0} -ge 1 ]]; then PASS=$((PASS+1)); echo "PASS: NoResp503 counted ($N503C)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("503 counter"); echo "FAIL: NoResp503 not counted"; fi
+
+# stats disabled message
+assert_contains "stats disabled message" "$(curl -s --max-time 4 http://127.0.0.1:18083/mod_tile)" "Stats are not enabled"
+
+
 echo
 echo "================================"
 echo "PASS=$PASS FAIL=$FAIL"

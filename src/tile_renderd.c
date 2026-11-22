@@ -558,7 +558,7 @@ ngx_http_tile_render_done(void *data, ngx_int_t rc)
 
     /* refresh the tile state and let the state table decide between
      * serving the (re-)rendered tile, serving stale, or returning 404 */
-    result = ngx_http_tile_check_state(r, ctx);
+    result = ngx_http_tile_check_state(r, ctx, rc);
 
     ngx_http_finalize_request(r, result);
 }

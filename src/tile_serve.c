@@ -20,6 +20,7 @@
 
 #include "ngx_mod_tile.h"
 #include "tile_serve.h"
+#include "tile_renderd.h"
 #include "sys_utils.h"
 #include <ngx_md5.h>
 #include <string.h>
@@ -269,6 +270,18 @@ ngx_http_tile_matcher(ngx_http_request_t *r)
 
     tlcf = ngx_http_get_module_loc_conf(r, ngx_http_tile_module);
 
+    if (tlcf->stats_page) {
+        ngx_http_set_ctx(r, NULL, ngx_http_tile_module);
+        r->content_handler = ngx_http_tile_stats_page;
+        return NGX_OK;
+    }
+
+    if (tlcf->metrics_page) {
+        ngx_http_set_ctx(r, NULL, ngx_http_tile_module);
+        r->content_handler = ngx_http_tile_metrics_page;
+        return NGX_OK;
+    }
+
     if (tlcf->layer.xmlname.len != 0) {
         /* location-scoped layer: nginx already routed by prefix */
         layer = &tlcf->layer;
@@ -353,20 +366,23 @@ ngx_http_tile_stat_state(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
 /* ------------------------------------------------------------------ */
 
 ngx_int_t
-ngx_http_tile_check_state(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
+ngx_http_tile_check_state(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx,
+    ngx_int_t render_rc)
 {
-    ngx_tile_state_e  previous = ctx->tile_state;
-    ngx_int_t         rc;
+    ngx_http_tile_main_conf_t *mcf;
+    ngx_tile_state_e           previous = ctx->tile_state;
+    ngx_int_t                  rc;
+
+    mcf = ngx_http_get_module_main_conf(r, ngx_http_tile_module);
 
     ctx->tile_state = ngx_http_tile_stat_state(r, ctx);
 
     rc = ngx_http_tile_send_response(r, ctx);
 
-    if (rc != NGX_OK) {
-        return rc;
-    }
-
-    if (previous == ngx_tile_missing) {
+    /* fresh counters, port of the storage_hook tail: cmdDone ->
+     * FRESH_RENDER regardless of the previous state; a timeout or notDone
+     * keeps the stale-served counter for old/veryold tiles */
+    if (render_rc == NGX_TILE_CONN_DONE) {
         ctx->fresh_code = NGX_TILE_FRESH_RENDER;
     } else if (previous == ngx_tile_old) {
         ctx->fresh_code = NGX_TILE_OLD_RENDER;
@@ -376,7 +392,9 @@ ngx_http_tile_check_state(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
         ctx->fresh_code = NGX_TILE_FRESH;
     }
 
-    return NGX_OK;
+    ngx_http_tile_stats_fresh(mcf, ctx->fresh_code);
+
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */
@@ -435,18 +453,29 @@ static ngx_int_t
 ngx_http_tile_serve_flow(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
 {
     ngx_http_tile_loc_conf_t *tlcf;
+    ngx_http_tile_main_conf_t *mcf;
     struct protocol           dirty_cmd;
     double                    avg;
     ngx_int_t                 rc, priority;
 
     tlcf = ngx_http_get_module_loc_conf(r, ngx_http_tile_module);
+    mcf = ngx_http_get_module_main_conf(r, ngx_http_tile_module);
 
     ctx->tile_state = ngx_http_tile_stat_state(r, ctx);
     ctx->head_only = (r->method == NGX_HTTP_HEAD);
 
+    /* per-IP throttle, port of the storage_hook delaypool gate */
+    if (tlcf->throttle_enabled && mcf->delaypool != NULL
+        && !ngx_http_tile_delay_allowed(r, tlcf, ctx->tile_state))
+    {
+        ngx_http_tile_stats_response(r, ctx, NGX_HTTP_SERVICE_UNAVAILABLE);
+        return NGX_HTTP_SERVICE_UNAVAILABLE;
+    }
+
     switch (ctx->tile_state) {
     case ngx_tile_current:
         ctx->fresh_code = NGX_TILE_FRESH;
+        ngx_http_tile_stats_fresh(mcf, ctx->fresh_code);
         return ngx_http_tile_send_response(r, ctx);
 
     case ngx_tile_old:
@@ -456,6 +485,7 @@ ngx_http_tile_serve_flow(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
             /* bulk mode never renders on demand */
             ctx->fresh_code = (ctx->tile_state == ngx_tile_old)
                               ? NGX_TILE_OLD : NGX_TILE_VERYOLD;
+            ngx_http_tile_stats_fresh(mcf, ctx->fresh_code);
             return ngx_http_tile_send_response(r, ctx);
         }
 
@@ -471,6 +501,7 @@ ngx_http_tile_serve_flow(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
             ngx_http_tile_dirty_submit_detached(r, tlcf, &dirty_cmd);
             ctx->fresh_code = (ctx->tile_state == ngx_tile_old)
                               ? NGX_TILE_OLD : NGX_TILE_VERYOLD;
+            ngx_http_tile_stats_fresh(mcf, ctx->fresh_code);
             return ngx_http_tile_send_response(r, ctx);
         }
 
@@ -489,15 +520,17 @@ ngx_http_tile_serve_flow(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
                           (int) tlcf->max_load_missing);
             dirty_cmd = ctx->cmd;
             ngx_http_tile_dirty_submit_detached(r, tlcf, &dirty_cmd);
+            ngx_http_tile_stats_response(r, ctx, NGX_HTTP_NOT_FOUND);
             return NGX_HTTP_NOT_FOUND;
         }
 
-        ctx->fresh_code = NGX_TILE_FRESH_RENDER;
         break;
 
     default:
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "tile: unexpected tileState %d", (int) ctx->tile_state);
+        ngx_http_tile_stats_response(r, ctx,
+                                     NGX_HTTP_INTERNAL_SERVER_ERROR);
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -514,9 +547,14 @@ ngx_http_tile_serve_flow(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
         r->main->count--;
 
         if (ctx->tile_state == ngx_tile_missing) {
+            ngx_http_tile_stats_response(r, ctx, NGX_HTTP_NOT_FOUND);
             return NGX_HTTP_NOT_FOUND;
         }
 
+        /* upstream still counts the stale-served old/veryold tile */
+        ctx->fresh_code = (ctx->tile_state == ngx_tile_old)
+                          ? NGX_TILE_OLD_RENDER : NGX_TILE_VERYOLD_RENDER;
+        ngx_http_tile_stats_fresh(mcf, ctx->fresh_code);
         return ngx_http_tile_send_response(r, ctx);
     }
 

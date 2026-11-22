@@ -15,6 +15,7 @@
 
 #include "ngx_mod_tile.h"
 #include "tile_response.h"
+#include "tile_stats.h"
 #include <ngx_md5.h>
 
 #define NGX_TILE_CORS_MAX_AGE 604800
@@ -459,6 +460,7 @@ ngx_http_tile_send_response(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
     ngx_str_t                 *accept_enc;
     ngx_table_elt_t           *h;
     ngx_int_t                  rc;
+    struct timeval             tv_start, tv_end;
 
     if (ctx->layer->cors.len != 0) {
         rc = ngx_http_tile_cors(r, &ctx->layer->cors);
@@ -485,16 +487,25 @@ ngx_http_tile_send_response(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
 
     err_msg[0] = '\0';
 
+    gettimeofday(&tv_start, NULL);
+
     len = ctx->store->tile_read(ctx->store, (const char *) ctx->cmd.xmlname,
                                 (const char *) ctx->cmd.options, ctx->cmd.x,
                                 ctx->cmd.y, ctx->cmd.z, (char *) buf, MAX_SIZE,
                                 &compressed, err_msg);
+
+    gettimeofday(&tv_end, NULL);
+    ngx_http_tile_stats_timing(r, ctx,
+        (tv_end.tv_sec - tv_start.tv_sec) * 1000000
+        + (tv_end.tv_usec - tv_start.tv_usec));
 
     if (len <= 0) {
         ngx_log_error(NGX_LOG_WARN, r->connection->log, 0,
                       "tile: failed to read tile %s z%d x%d y%d from "
                       "storage: %s", ctx->cmd.xmlname, ctx->cmd.z,
                       ctx->cmd.x, ctx->cmd.y, err_msg);
+        ctx->resp_status = NGX_HTTP_NOT_FOUND;
+        ngx_http_tile_stats_response(r, ctx, NGX_HTTP_NOT_FOUND);
         return NGX_HTTP_NOT_FOUND;
     }
 
@@ -547,23 +558,38 @@ ngx_http_tile_send_response(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
     rc = ngx_http_tile_conditions(r, etag_buf, 34);
     if (rc != NGX_OK) {
         r->headers_out.status = rc; /* NGX_HTTP_NOT_MODIFIED */
+        ctx->resp_status = rc;
         if (ngx_http_send_header(r) != NGX_OK) {
+            ctx->resp_status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+            ngx_http_tile_stats_response(r, ctx,
+                                         NGX_HTTP_INTERNAL_SERVER_ERROR);
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
         }
+        ngx_http_tile_stats_response(r, ctx, rc);
         return NGX_OK;
     }
 
     r->headers_out.status = NGX_HTTP_OK;
+    ctx->resp_status = NGX_HTTP_OK;
 
     if (ngx_http_send_header(r) != NGX_OK) {
+        ctx->resp_status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        ngx_http_tile_stats_response(r, ctx, NGX_HTTP_INTERNAL_SERVER_ERROR);
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     if (r->header_only) {
+        ngx_http_tile_stats_response(r, ctx, NGX_HTTP_OK);
         return NGX_OK;
     }
 
-    return ngx_http_tile_output_body(r, buf, len);
+    rc = ngx_http_tile_output_body(r, buf, len);
+
+    ctx->resp_status = (rc == NGX_OK) ? NGX_HTTP_OK
+                                      : NGX_HTTP_INTERNAL_SERVER_ERROR;
+    ngx_http_tile_stats_response(r, ctx, ctx->resp_status);
+
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */

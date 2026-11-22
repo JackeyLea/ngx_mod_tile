@@ -17,8 +17,8 @@ them using nginx.
 - ✅ CORS with `OPTIONS` preflight short-circuit (port of `add_cors`)
 - ✅ `tile-layer.json` (TileJSON 2.0.0), `/status`, `/dirty` endpoints
 - ✅ `tile_import_config` — reads `renderd.conf` `[map]` sections (iniparser)
+- ✅ **Stage 2**: shared-memory stats counters, `/mod_tile` stats page, `/metrics` (Prometheus), per-IP delaypool throttling with whitelist and X-Forwarded-For
 - ✅ Per-worker cached storage backends (`file`, `null`; memcached/rados/etc. in stage 3)
-- ⬜ Stage 2: `/mod_tile` stats page, `/metrics` (Prometheus), delaypool per-IP throttling, X-Forwarded-For
 - ⬜ Stage 3: memcached / rados / composite / ro_http_proxy stores, style parameterization
 
 ## Architecture
@@ -124,6 +124,19 @@ server {
     # Option B: import [map] sections from renderd.conf (uri prefix routing)
     tile_import_config /etc/renderd.conf;
 
+    # stage 2: statistics (counters live in a shared zone, global across servers)
+    tile_stats_zone 4m;                  # default 4m
+    location = /mod_tile { tile_stats on; }
+    location = /metrics { tile_metrics on; }
+
+    # stage 2: per-IP throttling (token buckets in shared memory)
+    tile_throttling_zone 8m;             # defines the pool; required for throttling
+    tile_throttling on;                  # per server/scope
+    tile_throttling_tiles 5000 1;        # bucket size, refill per second
+    tile_throttling_renders 65 0.2;
+    tile_throttling_whitelist 10.0.0.5;  # exempt, up to 13 IPv4 entries
+    tile_throttling_xforward 0;          # 1 = first XFF entry, 2 = last
+
     # endpoints handled inside every tile layer:
     #   /osm/z/x/y.png            tile
     #   /osm/z/x/y.png/status     freshness text
@@ -147,7 +160,7 @@ value: `/path` → file store, `null://` → blackhole. (`rados://`,
 | Conditional requests | full `ap_meets_conditions` | `If-None-Match` only (mod_tile never sends Last-Modified) |
 | TileJSON hostnames | `ServerName`/`ServerAlias` | `tile_hostname` (repeatable) or `server_name` |
 | JSON escaping | none | none (byte-compatible) |
-| Stats / throttling | built-in | stage 2 |
+| Stats / throttling | built-in, global fill-up pass over 100k slots | stage 2: shm zones, per-slot lazy refill, immediate 503 (no `sleep(3)`), config-based whitelist |
 | renderd protocol | v2/v3 | v2/v3 — **drop-in compatible with an existing renderd and tile store** |
 
 ## Testing
@@ -163,7 +176,9 @@ protocol over a unix socket) and nginx with a generated metatile store
 (echo/Vary/403/preflight), gzip METZ handling, oob/bad-extension 404s, the
 renderd.conf-imported layer, TileJSON fields, /status texts, /dirty wire
 traffic, stale-tile serving with render submission, on-demand rendering with
-correct content, renderd-dead timeout paths, and the async-concurrency proof.
+correct content, renderd-dead timeout paths, the async-concurrency proof, plus
+the stage 2 counters (/mod_tile fields, Prometheus families and labels), the
+per-IP throttle 503s with whitelist bypass, and the stats-disabled message.
 
 ## License
 

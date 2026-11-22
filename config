@@ -12,6 +12,10 @@ if test -n "$ngx_module_link"; then
                       $ngx_addon_dir/src/tile_serve.h \
                       $ngx_addon_dir/src/tile_response.h \
                       $ngx_addon_dir/src/tile_endpoints.h \
+                      $ngx_addon_dir/src/tile_stats.h \
+                      $ngx_addon_dir/src/tile_delaypool.h \
+                      $ngx_addon_dir/src/tile_stats_shm.h \
+                      $ngx_addon_dir/src/tile_delaypool_shm.h \
                       $ngx_addon_dir/vendor/tile_compat.h \
                       $ngx_addon_dir/vendor/g_logger.h \
                       $ngx_addon_dir/vendor/protocol.h \
@@ -31,6 +35,8 @@ if test -n "$ngx_module_link"; then
                       $ngx_addon_dir/src/tile_serve.c \
                       $ngx_addon_dir/src/tile_response.c \
                       $ngx_addon_dir/src/tile_endpoints.c \
+                      $ngx_addon_dir/src/tile_stats.c \
+                      $ngx_addon_dir/src/tile_delaypool.c \
                       $ngx_addon_dir/vendor/store.c \
                       $ngx_addon_dir/vendor/store_file.c \
                       $ngx_addon_dir/vendor/store_file_utils.c \
@@ -58,6 +64,8 @@ else
                     $ngx_addon_dir/src/tile_serve.c \
                     $ngx_addon_dir/src/tile_response.c \
                     $ngx_addon_dir/src/tile_endpoints.c \
+                    $ngx_addon_dir/src/tile_stats.c \
+                    $ngx_addon_dir/src/tile_delaypool.c \
                     $ngx_addon_dir/vendor/store.c \
                     $ngx_addon_dir/vendor/store_file.c \
                     $ngx_addon_dir/vendor/store_file_utils.c \
