@@ -366,7 +366,6 @@ ngx_http_tile_add_expiry(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
     long int                   maxAge, minCache = 0, lastModified = 0;
     double                     holdoff;
     u_char                     buf[64];
-    u_char                    *last;
     ngx_table_elt_t           *h;
     u_char                    *expires;
     u_char                    *expires_buf;
@@ -416,16 +415,19 @@ ngx_http_tile_add_expiry(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
         }
     }
 
-    last = ngx_snprintf(buf, sizeof(buf) - 1, "max-age=%ld", maxAge);
+    {
+        /* use libc snprintf: it NUL-terminates and returns the exact length */
+        int len = snprintf((char *) buf, sizeof(buf), "max-age=%ld", maxAge);
 
-    h = ngx_list_push(&r->headers_out.headers);
-    if (h != NULL) {
-        h->hash = 1;
-        ngx_str_set(&h->key, "Cache-Control");
-        h->value.data = ngx_pnalloc(r->pool, last - buf);
-        if (h->value.data != NULL) {
-            ngx_memcpy(h->value.data, buf, last - buf);
-            h->value.len = last - buf;
+        h = ngx_list_push(&r->headers_out.headers);
+        if (h != NULL) {
+            h->hash = 1;
+            ngx_str_set(&h->key, "Cache-Control");
+            h->value.data = ngx_pnalloc(r->pool, len);
+            if (h->value.data != NULL) {
+                ngx_memcpy(h->value.data, buf, len);
+                h->value.len = len;
+            }
         }
     }
 
@@ -433,14 +435,16 @@ ngx_http_tile_add_expiry(ngx_http_request_t *r, ngx_http_tile_ctx_t *ctx)
     if (expires_buf == NULL) {
         return;
     }
+
     expires = ngx_http_cookie_time(expires_buf, now_sec + maxAge);
 
     h = ngx_list_push(&r->headers_out.headers);
     if (h != NULL) {
         h->hash = 1;
         ngx_str_set(&h->key, "Expires");
+        /* cookie_time returns the END pointer: length = end - buf */
         h->value.data = expires_buf;
-        h->value.len = ngx_strlen(expires);
+        h->value.len = expires - expires_buf;
     }
 }
 

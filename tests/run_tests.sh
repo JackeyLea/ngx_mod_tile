@@ -376,14 +376,20 @@ assert_status "tile unaffected by disabled switches" "http://127.0.0.1:18090/til
 
 echo "== phase 7: Cache-Control algorithm (dirty jitter, zoom tiers, extended host, expires, factor clamp) =="
 
+# restore the mock to done mode (phase 6 switched it to notdone)
+kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null || true
+start_mock --mode done --delay 0.05 --render-dir "$BASE"
+
+
 # helper: extract max-age from Cache-Control header
 maxage() {  # $1 url, extra curl args...
     curl -sI --max-time 4 "$@" "$1" 2>/dev/null | tr -d '\r' | awk -F'[=,]' '/max-age/{print $2; exit}' | tr -d ' '
 }
 
-# dirty branch: old tile -> maxAge = 900 + jitter(0..450), clamped by max 604800
+# dirty branch: old tile served stale (no re-render on the load-shed server)
+# -> maxAge = 900 + jitter(0..450), clamped by max 604800
 backdate_old_tile
-A=$(maxage "http://127.0.0.1:18091/tiles/8/64/64.png")
+A=$(maxage "http://127.0.0.1:18086/tiles/8/64/64.png")
 if [[ "$A" -ge 900 && "$A" -le 1350 ]]; then PASS=$((PASS+1)); echo "PASS: dirty branch max-age in [900,1350] ($A)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("dirty jitter"); echo "FAIL: dirty branch max-age $A not in [900,1350]"; fi
 
 # zoom tiers: z=1 (<=2) -> minCache=3600 + jitter(0..10800)
@@ -402,14 +408,16 @@ if [[ "$A" -ge 10800 && "$A" -le 21600 ]]; then PASS=$((PASS+1)); echo "PASS: de
 A=$(maxage "http://127.0.0.1:18091/tiles/1/0/0.png" -H 'Host: cache.example.com')
 assert_eq "extended hostname exact max-age" "$A" "86400"
 
-# Expires consistency: expires epoch - request epoch ~= maxAge
-REQ_START=$(date +%s)
-EXP=$(curl -sI --max-time 4 "http://127.0.0.1:18091/tiles/1/0/0.png" | tr -d '\r' | awk '/^Expires:/{print $2, $3, $4, $5, $6, $7}')
+# Expires consistency: read both headers from ONE response (jitter is random
+# per request, so the two headers must come from the same response)
+RESP=$(curl -sI --max-time 4 "http://127.0.0.1:18091/tiles/1/0/0.png" | tr -d '\r')
+MA=$(echo "$RESP" | awk -F'[=,]' '/max-age/{print $2; exit}' | tr -d ' ')
+EXP=$(echo "$RESP" | awk '/^Expires:/{print $2, $3, $4, $5, $6, $7}')
 EXP_EPOCH=$(date -d "$EXP" +%s)
-MA=$(maxage "http://127.0.0.1:18091/tiles/1/0/0.png")
+REQ_START=$(date +%s)
 DIFF=$(( EXP_EPOCH - REQ_START ))
 DIFF=$(( DIFF < 0 ? -DIFF : DIFF ))
-if [[ "$DIFF" -le "$MA" && "$MA" -le "$DIFF" + 3 ]]; then PASS=$((PASS+1)); echo "PASS: Expires matches max-age (diff=${DIFF}, maxage=${MA})"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("expires consistency"); echo "FAIL: expires=$EXP_EPOCH request=$REQ_START maxage=$MA"; fi
+if [[ "$DIFF" -ge "$MA" && "$DIFF" -le $(( MA + 3 )) ]]; then PASS=$((PASS+1)); echo "PASS: Expires matches max-age (diff=${DIFF}, maxage=${MA})"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("expires consistency"); echo "FAIL: expires=$EXP_EPOCH request=$REQ_START maxage=$MA"; fi
 
 # last_modified_factor: a fresh tile whose mtime is 2 days old with a planet
 # timestamp 4 days old -> lastModified = 2d * factor 10 > max -> clamped to 604800
@@ -424,6 +432,17 @@ touch -d "4 days ago" /tmp/tilestore/test/planet-import-complete
 # tier when factor is huge: covered by factor server below.
 
 # restore the planet timestamp so later phases see fresh tiles again
+touch /tmp/tilestore/test/planet-import-complete
+
+
+
+# last_modified_factor clamp: a fresh tile with mtime 2 days old and planet
+# timestamp 4 days old -> lastModified = 2d * 10 > max -> clamp to 604800
+FMETA=/tmp/tilestore/test/5/0/0/0/0/0.meta
+touch -d "2 days ago" "$FMETA"
+touch -d "4 days ago" /tmp/tilestore/test/planet-import-complete
+A=$(maxage "http://127.0.0.1:18092/tiles/5/1/1.png")
+assert_eq "last_modified_factor clamp to max" "$A" "604800"
 touch /tmp/tilestore/test/planet-import-complete
 
 

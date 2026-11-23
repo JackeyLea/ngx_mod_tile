@@ -293,7 +293,10 @@ render), style parameterization including options-aware render round-trips,
 plus the coverage gaps: bulk mode (RenderBulk submission, stale old tiles),
 load shedding (dirty submission, missing 404), render-bucket exhaustion
 (503s, single render submitted), XFF modes 1/2 (first vs last entry),
-cmdNotDone replies, and disabled status/dirty switches.
+cmdNotDone replies, disabled status/dirty switches, and the full
+Cache-Control algorithm (dirty-branch jitter bounds, low/medium/default
+zoom tiers, extended-hostname exact max-age, Expires/max-age consistency,
+last_modified_factor clamping).
 
 ## License
 
