@@ -249,6 +249,15 @@ ngx_http_tile_delay_allowed(ngx_http_request_t *r,
         e->last_tile_topup = now;
         e->last_render_topup = now;
     } else {
+        /* clamp to the CURRENT scope's bucket size at access time: a
+         * previously larger bucket may have left more tokens behind */
+        if (e->available_tiles > tlcf->throttle_tile_bucket) {
+            e->available_tiles = tlcf->throttle_tile_bucket;
+        }
+        if (e->available_render_req > tlcf->throttle_render_bucket) {
+            e->available_render_req = tlcf->throttle_render_bucket;
+        }
+
         /* lazy refill of this slot only */
         if (now > e->last_tile_topup) {
             tiles_topup = (now - e->last_tile_topup) / tlcf->throttle_tile_interval;

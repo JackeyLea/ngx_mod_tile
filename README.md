@@ -287,9 +287,13 @@ renderd.conf-imported layer, TileJSON fields, /status texts, /dirty wire
 traffic, stale-tile serving with render submission, on-demand rendering with
 correct content, renderd-dead timeout paths, the async-concurrency proof, plus
 the stage 2 counters (/mod_tile fields, Prometheus families and labels), the
-per-IP throttle 503s with whitelist bypass, the stats-disabled message, the
-thread-pool serving path (fresh/304/on-demand render), and style
-parameterization including options-aware render round-trips.
+per-IP throttle 503s with whitelist bypass and X-Forwarded-For modes, the
+stats-disabled message, the thread-pool serving path (fresh/304/on-demand
+render), style parameterization including options-aware render round-trips,
+plus the coverage gaps: bulk mode (RenderBulk submission, stale old tiles),
+load shedding (dirty submission, missing 404), render-bucket exhaustion
+(503s, single render submitted), XFF modes 1/2 (first vs last entry),
+cmdNotDone replies, and disabled status/dirty switches.
 
 ## License
 

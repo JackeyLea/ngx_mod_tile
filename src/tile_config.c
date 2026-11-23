@@ -45,6 +45,8 @@ static char *ngx_http_tile_throttle_xforward_directive(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
 static char *ngx_http_tile_thread_pool_directive(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
+static char *ngx_http_tile_signed_num_directive(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf);
 static ngx_int_t ngx_http_tile_register_layer(ngx_conf_t *cf,
     ngx_http_tile_main_conf_t *mcf, ngx_http_tile_layer_t *layer);
 
@@ -175,14 +177,14 @@ ngx_command_t ngx_http_tile_commands[] = {
 
     { ngx_string("tile_max_load_old"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_num_slot,
+      ngx_http_tile_signed_num_directive,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_tile_loc_conf_t, max_load_old),
       NULL },
 
     { ngx_string("tile_max_load_missing"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_num_slot,
+      ngx_http_tile_signed_num_directive,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_tile_loc_conf_t, max_load_missing),
       NULL },
@@ -887,6 +889,24 @@ ngx_http_tile_thread_pool_directive(ngx_conf_t *cf, ngx_command_t *cmd,
 #else
     return "requires nginx built with --with-threads";
 #endif
+}
+
+static char *
+ngx_http_tile_signed_num_directive(ngx_conf_t *cf, ngx_command_t *cmd,
+    void *conf)
+{
+    ngx_str_t  *value = cf->args->elts;
+    char       *end;
+    long        v;
+
+    v = strtol((const char *) value[1].data, &end, 10);
+    if (end == (const char *) value[1].data || *end != '\0') {
+        return "is not a valid number";
+    }
+
+    *(ngx_int_t *) ((char *) conf + cmd->offset) = v;
+
+    return NGX_CONF_OK;
 }
 
 static ngx_int_t
