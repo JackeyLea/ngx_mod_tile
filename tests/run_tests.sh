@@ -446,6 +446,51 @@ assert_eq "last_modified_factor clamp to max" "$A" "604800"
 touch /tmp/tilestore/test/planet-import-complete
 
 
+
+echo "== phase 8: coordinate/URI edge cases =="
+
+# non-numeric coordinates
+assert_status "non-numeric z -> 404" "$BASE_URL/tiles/abc/1/1.png" 404
+assert_status "non-numeric x -> 404" "$BASE_URL/tiles/3/abc/1.png" 404
+assert_status "non-numeric y -> 404" "$BASE_URL/tiles/3/1/abc.png" 404
+
+# negative coordinates (parse_int rejects the sign)
+assert_status "negative x -> 404" "$BASE_URL/tiles/3/-1/1.png" 404
+assert_status "negative z -> 404" "$BASE_URL/tiles/-1/1/1.png" 404
+
+# integer overflow
+assert_status "overflow z -> 404" "$BASE_URL/tiles/2147483648/0/0.png" 404
+
+# empty segment (skipped by strtok)
+assert_status "empty segment -> 404" "$BASE_URL/tiles/3//1.png" 404
+
+# missing extension / wrong extension / uppercase / multi-dot
+assert_status "no extension -> 404" "$BASE_URL/tiles/3/1/1" 404
+assert_status "wrong extension -> 404" "$BASE_URL/tiles/3/1/1.jpg" 404
+assert_status "uppercase extension -> 404" "$BASE_URL/tiles/3/1/1.PNG" 404
+assert_status "multi-dot extension: last dot is the ext (1.tar -> bad y) -> 404" "$BASE_URL/tiles/3/1/1.tar.png" 404
+
+# zoom bounds
+assert_status "zoom above maxzoom -> 404" "$BASE_URL/tiles/30/0/0.png" 404
+assert_status "zoom 31 -> 404" "$BASE_URL/tiles/31/0/0.png" 404
+
+# coordinate bounds at zoom 2 (max x/y = 3)
+assert_status "x == 2^z -> 404" "$BASE_URL/tiles/2/4/0.png" 404
+assert_status "x == 2^z - 1 -> 200" "$BASE_URL/tiles/2/3/3.png" 200
+
+# URI structure: missing parts
+assert_status "only z -> 404" "$BASE_URL/tiles/3/" 404
+assert_status "only z/x -> 404" "$BASE_URL/tiles/3/1/" 404
+
+# extra segments: n_parts==4 non-status/dirty -> DECLINED (404 by catch-all);
+# n_parts>=5 -> tile_serve (upstream else-branch, extra parts ignored)
+assert_status "extra single segment (not status/dirty) -> 404" "$BASE_URL/tiles/3/1/1.png/junk" 404
+assert_status "two extra segments -> serve (upstream else-branch)" "$BASE_URL/tiles/3/1/1.png/extra/more" 200
+
+# trailing slash is skipped by strtok -> still a valid tile request
+assert_status "trailing slash -> 200" "$BASE_URL/tiles/3/1/1.png/" 200
+
+
 echo
 echo "================================"
 echo "PASS=$PASS FAIL=$FAIL"
