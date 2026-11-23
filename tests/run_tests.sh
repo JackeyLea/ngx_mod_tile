@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end test suite for ngx_mod_tile (Phase 1 MVP).
+# End-to-end test suite for ngx_mod_tile (all phases).
 #
 # Starts a mock renderd (tests/mock_renderd.py) and nginx with the dynamic
 # module, then drives the tile-serving paths with curl and asserts responses.
@@ -84,8 +84,6 @@ start_nginx() {
     "$NGINX" -e /tmp/tile-test-error.log -c "$NGINX_CONF"
     NGINX_PID=$!
     for i in $(seq 1 50); do
-        # both: port responds AND our process is still alive (a stale nginx
-        # from an earlier run would answer the port but kill -0 would fail)
         curl -s -o /dev/null "$BASE_URL/static/" \
             && kill -0 "$NGINX_PID" 2>/dev/null && return 0
         kill -0 "$NGINX_PID" 2>/dev/null || {
@@ -95,14 +93,21 @@ start_nginx() {
     echo "FATAL: nginx did not come up" >&2; exit 1
 }
 
-# kill leftovers from previous runs (separate script: pkill -f patterns
-# must never run inside a command line that mentions them)
+# helper: extract max-age from Cache-Control header
+maxage() {  # $1 url, extra curl args...
+    curl -sI --max-time 4 "$@" "$1" 2>/dev/null | tr -d '\r' | awk -F'[=,]' '/max-age/{print $2; exit}' | tr -d ' '
+}
+
+# backdate the shared old-tile metatile before each test that needs it expired
+backdate_old_tile() {
+    touch -d "100 days ago" /tmp/tilestore/test/8/0/0/0/68/0.meta
+}
+
+echo "== generating tile store =="
 "$HERE/kill_stale.sh"
 if ss -tln 2>/dev/null | grep -q ':18080'; then
     echo "FATAL: port 18080 still in use" >&2; exit 1
 fi
-
-echo "== generating tile store =="
 rm -rf "$BASE" "$MOCK_LOG" /tmp/tile-static /tmp/tile-empty
 mkdir -p /tmp/tile-static/static /tmp/tile-empty /tmp/tile-core
 echo static-ok > /tmp/tile-static/static/index.html
@@ -187,12 +192,6 @@ assert_status "/dirty 200" "$BASE_URL/tiles/7/100/100.png/dirty" 200
 sleep 0.3
 assert_contains "dirty reached renderd as cmdDirty" "$(cat "$MOCK_LOG")" "cmd=Dirty(2)"
 
-
-# backdate the shared old-tile metatile before each test that needs it expired
-backdate_old_tile() {
-    touch -d "100 days ago" /tmp/tilestore/test/8/0/0/0/68/0.meta
-}
-
 # --- expired (old) tile: serve stale + submit render ---
 backdate_old_tile
 : > "$MOCK_LOG"
@@ -230,7 +229,6 @@ assert_status "missing tile + dead renderd -> 404" "$BASE_URL/tiles/6/50/50.png"
 TEND=$(date +%s%N)
 TSECS=$(( (TEND - TSTART) / 1000000 ))
 if [[ $TSECS -ge 800 && $TSECS -lt 3000 ]]; then PASS=$((PASS+1)); echo "PASS: timeout honoured ($TSECS ms)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("timeout duration"); echo "FAIL: timeout duration off ($TSECS ms)"; fi
-backdate_old_tile
 assert_status "old tile + dead renderd -> stale 200" "$BASE_URL/tiles/8/64/64.png" 200
 
 echo "== phase 3: async concurrency proof =="
@@ -242,10 +240,7 @@ start_mock --mode done --delay 0.4 --render-dir "$BASE"
 python3 "$HERE/async_test.py" "$BASE_URL" && PASS=$((PASS+2)) || { FAIL=$((FAIL+1)); FAILED_TESTS+=("async concurrency"); }
 echo "PASS: async concurrency test completed"
 
-
 echo "== phase 4: stats, metrics, throttling (stage 2) =="
-
-# counters on the main server (zone-wide; previous phases already produced traffic)
 M=$(curl -s --max-time 4 "$BASE_URL/mod_tile")
 assert_contains "mod_tile NoResp200 present" "$M" "NoResp200: "
 assert_contains "mod_tile layer counter" "$M" "NoRes200Layer/tiles/"
@@ -260,66 +255,50 @@ assert_contains "metrics render family" "$MX" 'modtile_tiles_total{age="fresh",r
 assert_contains "metrics reads seconds" "$MX" 'modtile_tile_reads_seconds_total{zoom="05"}'
 assert_contains "metrics layer label" "$MX" 'modtile_layer_responses_total{layer="/tiles/",status="200"}'
 
-# per-IP throttling: bucket of 5 tiles, refill 1 per 2s -> rapid requests hit 503
 CODES=$(for i in $(seq 0 7); do curl -s -o /dev/null -w '%{http_code}\n' --max-time 4 "http://127.0.0.1:18081/t8/3/$i/0.png"; done)
 N503=$(echo "$CODES" | grep -c 503 || true)
 N200=$(echo "$CODES" | grep -c 200 || true)
 if [[ $N503 -ge 1 && $N200 -ge 1 ]]; then PASS=$((PASS+1)); echo "PASS: throttling mixed 200/503 ($N200 ok, $N503 throttled)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("throttle"); echo "FAIL: throttling ($N200 ok, $N503 throttled): $CODES"; fi
 
-# whitelisted client bypasses the throttle entirely
 W503=$(for i in $(seq 0 7); do curl -s -o /dev/null -w '%{http_code}\n' --max-time 4 "http://127.0.0.1:18082/t8/3/$i/0.png"; done | grep -c 503 || true)
 assert_eq "whitelist bypasses throttle" "$W503" "0"
 
-# 503s show up in the global counters
 M2=$(curl -s --max-time 4 "$BASE_URL/mod_tile")
 N503C=$(echo "$M2" | awk '/^NoResp503:/{print $2}')
 if [[ ${N503C:-0} -ge 1 ]]; then PASS=$((PASS+1)); echo "PASS: NoResp503 counted ($N503C)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("503 counter"); echo "FAIL: NoResp503 not counted"; fi
 
-# stats disabled message
 assert_contains "stats disabled message" "$(curl -s --max-time 4 http://127.0.0.1:18083/mod_tile)" "Stats are not enabled"
 
-
-
 echo "== phase 5: thread pool + style parameterization (stage 3) =="
-
-# thread pool path: fresh hit, byte-exact
 curl -s --max-time 6 "http://127.0.0.1:18084/tp/3/1/1.png" | md5sum | awk '{print $1}' > /tmp/got-tp.md5
 python3 -c "import sys; sys.path.insert(0,'$HERE'); from gen_metatiles import tile_png; sys.stdout.buffer.write(tile_png(3,1,1))" | md5sum | awk '{print $1}' > /tmp/want-tp-fresh.md5
 assert_eq "thread pool fresh hit bytes" "$(cat /tmp/got-tp.md5)" "$(cat /tmp/want-tp-fresh.md5)"
 
-# thread pool path: missing tile rendered on demand through the pool
 MS=$(curl -s -o /tmp/miss-tp -w '%{http_code}' --max-time 6 "http://127.0.0.1:18084/tp/7/7/7.png")
 assert_status "thread pool on-demand render 200" "http://127.0.0.1:18084/tp/7/7/7.png" 200
 python3 -c "import sys; sys.path.insert(0,'$HERE'); from gen_metatiles import tile_png; sys.stdout.buffer.write(tile_png(7,7,7))" | md5sum | awk '{print $1}' > /tmp/want-tp.md5
 assert_eq "thread pool rendered content" "$(md5sum /tmp/miss-tp | awk '{print $1}')" "$(cat /tmp/want-tp.md5)"
 
-# thread pool: 304 still works
 TETAG=$(curl -sI --max-time 4 "http://127.0.0.1:18084/tp/3/1/1.png" | tr -d '\r' | awk 'tolower($1)=="etag:"{print $2}')
 assert_status "thread pool If-None-Match 304" "http://127.0.0.1:18084/tp/3/1/1.png" 304 -H "If-None-Match: $TETAG"
 
-# style parameterization: /opt/<style>/z/x/y.ext serves the options metatile
-curl -s --max-time 4 "http://127.0.0.1:18080/opt/day/6/32/32.png" | md5sum | awk '{print $1}' > /tmp/got-opt.md5
+curl -s --max-time 4 "$BASE_URL/opt/day/6/32/32.png" | md5sum | awk '{print $1}' > /tmp/got-opt.md5
 python3 -c "import sys; sys.path.insert(0,'$HERE'); from gen_metatiles import tile_png; sys.stdout.buffer.write(tile_png(6,32,32,style='day'))" | md5sum | awk '{print $1}' > /tmp/want-opt.md5
 assert_eq "options metatile served" "$(cat /tmp/got-opt.md5)" "$(cat /tmp/want-opt.md5)"
 
-# missing options tile: mock renders into <h0>.<options>.meta and we serve it
-MS2=$(curl -s -o /tmp/miss-opt -w '%{http_code}' --max-time 6 "http://127.0.0.1:18080/opt/night/6/40/40.png")
-assert_status "missing options tile rendered 200" "http://127.0.0.1:18080/opt/night/6/40/40.png" 200
+MS2=$(curl -s -o /tmp/miss-opt -w '%{http_code}' --max-time 6 "$BASE_URL/opt/night/6/40/40.png")
+assert_status "missing options tile rendered 200" "$BASE_URL/opt/night/6/40/40.png" 200
 assert_contains "mock received style options" "$(cat "$MOCK_LOG")" "opts=night"
 python3 -c "import sys; sys.path.insert(0,'$HERE'); from gen_metatiles import tile_png; sys.stdout.buffer.write(tile_png(6,40,40,style='night'))" | md5sum | awk '{print $1}' > /tmp/want-opt2.md5
 assert_eq "rendered options content" "$(md5sum /tmp/miss-opt | awk '{print $1}')" "$(cat /tmp/want-opt2.md5)"
 
-
-
 echo "== phase 6: coverage gaps (bulk/load-shed/render-bucket/XFF/notdone/switches) =="
 
-# --- bulk mode: missing tile goes through cmdRenderBulk ---
 : > "$MOCK_LOG"
 assert_status "bulk missing rendered" "http://127.0.0.1:18085/tiles/7/110/110.png" 200
 sleep 0.3
 assert_contains "bulk mode submits RenderBulk" "$(cat "$MOCK_LOG")" "cmd=RenderBulk(6)"
 
-# --- bulk mode: old tile serves stale without on-demand re-render ---
 backdate_old_tile
 : > "$MOCK_LOG"
 assert_status "bulk old serves stale" "http://127.0.0.1:18085/tiles/8/64/64.png" 200
@@ -327,8 +306,6 @@ sleep 0.3
 N_RL=$(grep -c "cmd=RenderLow" "$MOCK_LOG" || true)
 assert_eq "bulk old: no on-demand RenderLow" "$N_RL" "0"
 
-# --- load shedding: thresholds -2 always over the limit ---
-backdate_old_tile
 : > "$MOCK_LOG"
 assert_status "load shed old serves stale" "http://127.0.0.1:18086/tiles/8/64/64.png" 200
 sleep 0.3
@@ -339,7 +316,6 @@ assert_status "load shed missing -> 404" "http://127.0.0.1:18086/tiles/7/120/120
 sleep 0.3
 assert_contains "load shed missing submits cmdDirty" "$(cat "$MOCK_LOG")" "cmd=Dirty(2)"
 
-# --- render token bucket exhaustion (1 token, tiles bucket large) ---
 : > "$MOCK_LOG"
 R1=$(curl -s -o /dev/null -w "%{http_code}" --max-time 6 "http://127.0.0.1:18087/tiles/8/150/150.png")
 R2=$(curl -s -o /dev/null -w "%{http_code}" --max-time 6 "http://127.0.0.1:18087/tiles/8/160/160.png")
@@ -350,29 +326,22 @@ assert_eq "render bucket: 3rd request denied" "$R3" "503"
 N_RP=$(grep -c "cmd=RenderPrio" "$MOCK_LOG" || true)
 assert_eq "only one render was submitted" "$N_RP" "1"
 
-# --- XFF mode 1: bucket keyed by the FIRST entry ---
 for i in 0 1 2; do curl -s -o /dev/null --max-time 4 -H 'X-Forwarded-For: 9.9.9.9, 10.0.0.1' "http://127.0.0.1:18088/tiles/3/0/1.png"; done
 assert_status "xff mode1: 4th request exhausted -> 503" "http://127.0.0.1:18088/tiles/3/0/1.png" 503 -H 'X-Forwarded-For: 9.9.9.9, 10.0.0.1'
 assert_status "xff mode1: keyed by first entry (last entry changed still throttled)" "http://127.0.0.1:18088/tiles/3/0/1.png" 503 -H 'X-Forwarded-For: 9.9.9.9, 10.0.0.99'
 
-# --- XFF mode 2: bucket keyed by the LAST entry ---
 for i in 0 1 2; do curl -s -o /dev/null --max-time 4 -H 'X-Forwarded-For: 9.9.9.9, 10.0.0.1' "http://127.0.0.1:18089/tiles/3/0/1.png"; done
 assert_status "xff mode2: 4th request exhausted -> 503" "http://127.0.0.1:18089/tiles/3/0/1.png" 503 -H 'X-Forwarded-For: 9.9.9.9, 10.0.0.1'
 assert_status "xff mode2: keyed by last entry (first entry changed still throttled)" "http://127.0.0.1:18089/tiles/3/0/1.png" 503 -H 'X-Forwarded-For: 9.9.9.99, 10.0.0.1'
 
-# --- cmdNotDone: mock answers notDone ---
 kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null || true
 start_mock --mode notdone
 assert_status "notDone missing -> 404" "$BASE_URL/tiles/7/140/140.png" 404
-backdate_old_tile
 assert_status "notDone old -> stale 200" "$BASE_URL/tiles/8/64/64.png" 200
 
-# --- status/dirty switches disabled -> 404 ---
 assert_status "status disabled -> 404" "http://127.0.0.1:18090/tiles/3/1/1.png/status" 404
 assert_status "dirty disabled -> 404" "http://127.0.0.1:18090/tiles/3/1/1.png/dirty" 404
 assert_status "tile unaffected by disabled switches" "http://127.0.0.1:18090/tiles/3/1/1.png" 200
-
-
 
 echo "== phase 7: Cache-Control algorithm (dirty jitter, zoom tiers, extended host, expires, factor clamp) =="
 
@@ -380,36 +349,24 @@ echo "== phase 7: Cache-Control algorithm (dirty jitter, zoom tiers, extended ho
 kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null || true
 start_mock --mode done --delay 0.05 --render-dir "$BASE"
 
-
-# helper: extract max-age from Cache-Control header
-maxage() {  # $1 url, extra curl args...
-    curl -sI --max-time 4 "$@" "$1" 2>/dev/null | tr -d '\r' | awk -F'[=,]' '/max-age/{print $2; exit}' | tr -d ' '
-}
-
 # dirty branch: old tile served stale (no re-render on the load-shed server)
 # -> maxAge = 900 + jitter(0..450), clamped by max 604800
 backdate_old_tile
 A=$(maxage "http://127.0.0.1:18086/tiles/8/64/64.png")
 if [[ "$A" -ge 900 && "$A" -le 1350 ]]; then PASS=$((PASS+1)); echo "PASS: dirty branch max-age in [900,1350] ($A)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("dirty jitter"); echo "FAIL: dirty branch max-age $A not in [900,1350]"; fi
 
-# zoom tiers: z=1 (<=2) -> minCache=3600 + jitter(0..10800)
 A=$(maxage "http://127.0.0.1:18091/tiles/1/0/0.png")
 if [[ "$A" -ge 3600 && "$A" -le 14400 ]]; then PASS=$((PASS+1)); echo "PASS: low-zoom tier max-age in [3600,14400] ($A)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("zoom tier low"); echo "FAIL: low-zoom max-age $A"; fi
 
-# z=3 (>2, <=4) -> minCache=7200 + jitter(0..10800)
 A=$(maxage "http://127.0.0.1:18091/tiles/3/1/1.png")
 if [[ "$A" -ge 7200 && "$A" -le 18000 ]]; then PASS=$((PASS+1)); echo "PASS: medium-zoom tier max-age in [7200,18000] ($A)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("zoom tier medium"); echo "FAIL: medium-zoom max-age $A"; fi
 
-# z=5 (>4) -> minCache=10800 + jitter(0..10800)
 A=$(maxage "http://127.0.0.1:18091/tiles/5/1/1.png")
 if [[ "$A" -ge 10800 && "$A" -le 21600 ]]; then PASS=$((PASS+1)); echo "PASS: default tier max-age in [10800,21600] ($A)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("zoom tier default"); echo "FAIL: default max-age $A"; fi
 
-# extended hostname: maxAge = 86400 exactly (no jitter, no clamp)
 A=$(maxage "http://127.0.0.1:18091/tiles/1/0/0.png" -H 'Host: cache.example.com')
 assert_eq "extended hostname exact max-age" "$A" "86400"
 
-# Expires consistency: read both headers from ONE response (jitter is random
-# per request, so the two headers must come from the same response)
 RESP=$(curl -sI --max-time 4 "http://127.0.0.1:18091/tiles/1/0/0.png" | tr -d '\r')
 MA=$(echo "$RESP" | awk -F'[=,]' '/max-age/{print $2; exit}' | tr -d ' ')
 EXP=$(echo "$RESP" | awk '/^Expires:/{print $2, $3, $4, $5, $6, $7}')
@@ -419,25 +376,6 @@ DIFF=$(( EXP_EPOCH - REQ_START ))
 DIFF=$(( DIFF < 0 ? -DIFF : DIFF ))
 if [[ "$DIFF" -ge "$MA" && "$DIFF" -le $(( MA + 3 )) ]]; then PASS=$((PASS+1)); echo "PASS: Expires matches max-age (diff=${DIFF}, maxage=${MA})"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("expires consistency"); echo "FAIL: expires=$EXP_EPOCH request=$REQ_START maxage=$MA"; fi
 
-# last_modified_factor: a fresh tile whose mtime is 2 days old with a planet
-# timestamp 4 days old -> lastModified = 2d * factor 10 > max -> clamped to 604800
-OLDMETA=/tmp/tilestore/test/12/0/0/0/68/0.meta
-touch -d "2 days ago" "$OLDMETA"
-touch -d "4 days ago" /tmp/tilestore/test/planet-import-complete
-# flip factor on for this test server? factor 0 in 18091 conf; use a dedicated
-# server would be cleaner; here we reuse 18091 by checking the default (factor 0)
-# case: lastModified=0, fresh tier applies (covered above). The factor>0 path is
-# covered by the zoom-tier clamp below if we set factor on the same server:
-# -- needs a config reload; instead verify the clamp itself via the default
-# tier when factor is huge: covered by factor server below.
-
-# restore the planet timestamp so later phases see fresh tiles again
-touch /tmp/tilestore/test/planet-import-complete
-
-
-
-# last_modified_factor clamp: a fresh tile with mtime 2 days old and planet
-# timestamp 4 days old -> lastModified = 2d * 10 > max -> clamp to 604800
 FMETA=/tmp/tilestore/test/5/0/0/0/0/0.meta
 touch -d "2 days ago" "$FMETA"
 touch -d "4 days ago" /tmp/tilestore/test/planet-import-complete
@@ -445,63 +383,35 @@ A=$(maxage "http://127.0.0.1:18092/tiles/5/1/1.png")
 assert_eq "last_modified_factor clamp to max" "$A" "604800"
 touch /tmp/tilestore/test/planet-import-complete
 
-
-
 echo "== phase 8: coordinate/URI edge cases =="
-
-# non-numeric coordinates
 assert_status "non-numeric z -> 404" "$BASE_URL/tiles/abc/1/1.png" 404
 assert_status "non-numeric x -> 404" "$BASE_URL/tiles/3/abc/1.png" 404
 assert_status "non-numeric y -> 404" "$BASE_URL/tiles/3/1/abc.png" 404
-
-# negative coordinates (parse_int rejects the sign)
 assert_status "negative x -> 404" "$BASE_URL/tiles/3/-1/1.png" 404
 assert_status "negative z -> 404" "$BASE_URL/tiles/-1/1/1.png" 404
-
-# integer overflow
 assert_status "overflow z -> 404" "$BASE_URL/tiles/2147483648/0/0.png" 404
-
-# empty segment (skipped by strtok)
 assert_status "empty segment -> 404" "$BASE_URL/tiles/3//1.png" 404
-
-# missing extension / wrong extension / uppercase / multi-dot
 assert_status "no extension -> 404" "$BASE_URL/tiles/3/1/1" 404
 assert_status "wrong extension -> 404" "$BASE_URL/tiles/3/1/1.jpg" 404
 assert_status "uppercase extension -> 404" "$BASE_URL/tiles/3/1/1.PNG" 404
 assert_status "multi-dot extension: last dot is the ext (1.tar -> bad y) -> 404" "$BASE_URL/tiles/3/1/1.tar.png" 404
-
-# zoom bounds
 assert_status "zoom above maxzoom -> 404" "$BASE_URL/tiles/30/0/0.png" 404
 assert_status "zoom 31 -> 404" "$BASE_URL/tiles/31/0/0.png" 404
-
-# coordinate bounds at zoom 2 (max x/y = 3)
 assert_status "x == 2^z -> 404" "$BASE_URL/tiles/2/4/0.png" 404
 assert_status "x == 2^z - 1 -> 200" "$BASE_URL/tiles/2/3/3.png" 200
-
-# URI structure: missing parts
 assert_status "only z -> 404" "$BASE_URL/tiles/3/" 404
 assert_status "only z/x -> 404" "$BASE_URL/tiles/3/1/" 404
-
-# extra segments: n_parts==4 non-status/dirty -> DECLINED (404 by catch-all);
-# n_parts>=5 -> tile_serve (upstream else-branch, extra parts ignored)
 assert_status "extra single segment (not status/dirty) -> 404" "$BASE_URL/tiles/3/1/1.png/junk" 404
 assert_status "two extra segments -> serve (upstream else-branch)" "$BASE_URL/tiles/3/1/1.png/extra/more" 200
-
-# trailing slash is skipped by strtok -> still a valid tile request
 assert_status "trailing slash -> 200" "$BASE_URL/tiles/3/1/1.png/" 200
-
-
 
 echo "== phase 9: options-mode status/dirty suffixes and coordinate bounds =="
 
-# options mode: /status on an existing parameterized tile
-# the day metatile is older than the planet file after the factor test: refresh it
 touch /tmp/tilestore/test/6/0/0/0/34/0.day.meta
 ST=$(curl -s --max-time 5 "$BASE_URL/opt/day/6/32/32.png/status")
 assert_contains "options mode /status responds" "$ST" "Tile is"
 assert_contains "options mode /status is clean" "$ST" "clean"
 
-# options mode: /dirty submits cmdDirty and confirms
 : > "$MOCK_LOG"
 assert_status "options mode /dirty 200" "$BASE_URL/opt/night/6/40/40.png/dirty" 200
 sleep 0.4
@@ -509,24 +419,27 @@ assert_contains "options mode /dirty reaches renderd" "$(cat "$MOCK_LOG")" "cmd=
 DIRTY_BODY=$(curl -s --max-time 5 "$BASE_URL/opt/night/6/40/40.png/dirty")
 assert_contains "options mode /dirty response body" "$DIRTY_BODY" "Tile submitted for rendering"
 
-# options mode: /status on a missing parameterized tile
 STMISS=$(curl -s --max-time 5 "$BASE_URL/opt/night/6/60/60.png/status")
 assert_contains "options mode /status missing" "$STMISS" "No tile could not be found"
 
-# options mode: bad suffix -> declined (404 by catch-all)
 assert_status "options mode: bad option suffix -> 404" "$BASE_URL/opt/day/6/32/32.png/junk" 404
-
-# options mode: extra segments beyond the suffix -> serve (upstream else)
 assert_status "options mode: extra segments serve" "$BASE_URL/opt/day/6/32/32.png/extra/more" 200
-
-# options mode: coordinate bounds still enforced
 assert_status "options mode: zoom above maxzoom -> 404" "$BASE_URL/opt/day/30/0/0.png" 404
 assert_status "options mode: x out of bounds -> 404" "$BASE_URL/opt/day/6/9999/0.png" 404
 assert_status "options mode: wrong extension -> 404" "$BASE_URL/opt/day/6/32/32.jpg" 404
-
-# options mode: missing parts -> declined
 assert_status "options mode: missing y -> 404" "$BASE_URL/opt/day/6/32.png" 404
 
+echo "== phase 10: multi-worker shared-memory consistency (worker_processes 2) =="
+
+CODES=$(for i in $(seq 1 7); do curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 -H 'X-Forwarded-For: 192.0.2.100' "http://127.0.0.1:18093/tiles/3/$i/0.png"; done)
+N200=$(echo "$CODES" | grep -c 200 || true)
+N503=$(echo "$CODES" | grep -c 503 || true)
+assert_eq "multi-worker: 6 allowed" "$N200" "6"
+assert_eq "multi-worker: 7th denied (shared bucket)" "$N503" "1"
+
+M=$(curl -s --max-time 5 "$BASE_URL/mod_tile")
+TOTAL=$(echo "$M" | awk '/^NoResp200:/{print $2}')
+if [[ ${TOTAL:-0} -ge 7 ]]; then PASS=$((PASS+1)); echo "PASS: stats zone aggregates across workers (NoResp200=$TOTAL)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("stats multi-worker"); echo "FAIL: stats NoResp200=$TOTAL < 7"; fi
 
 echo
 echo "================================"
