@@ -296,9 +296,11 @@ load shedding (dirty submission, missing 404), render-bucket exhaustion
 cmdNotDone replies, disabled status/dirty switches, the full Cache-Control
 algorithm (dirty-branch jitter bounds, low/medium/default zoom tiers,
 extended-hostname exact max-age, Expires/max-age consistency,
-last_modified_factor clamping), and coordinate/URI edge cases (non-numeric,
-negative, overflow, empty segments, missing/wrong/uppercase extensions,
-zoom and coordinate bounds, extra segments and trailing slashes).
+last_modified_factor clamping), coordinate/URI edge cases (non-numeric, negative, overflow, empty segments,
+missing/wrong/uppercase extensions, zoom and coordinate bounds, extra
+segments and trailing slashes), and options-mode status/dirty suffixes
+(clean/missing status text, cmdDirty submission and confirmation, coordinate
+bounds, bad suffix, extra segments).
 
 ## License
 

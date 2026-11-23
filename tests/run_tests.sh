@@ -491,6 +491,43 @@ assert_status "two extra segments -> serve (upstream else-branch)" "$BASE_URL/ti
 assert_status "trailing slash -> 200" "$BASE_URL/tiles/3/1/1.png/" 200
 
 
+
+echo "== phase 9: options-mode status/dirty suffixes and coordinate bounds =="
+
+# options mode: /status on an existing parameterized tile
+# the day metatile is older than the planet file after the factor test: refresh it
+touch /tmp/tilestore/test/6/0/0/0/34/0.day.meta
+ST=$(curl -s --max-time 5 "$BASE_URL/opt/day/6/32/32.png/status")
+assert_contains "options mode /status responds" "$ST" "Tile is"
+assert_contains "options mode /status is clean" "$ST" "clean"
+
+# options mode: /dirty submits cmdDirty and confirms
+: > "$MOCK_LOG"
+assert_status "options mode /dirty 200" "$BASE_URL/opt/night/6/40/40.png/dirty" 200
+sleep 0.4
+assert_contains "options mode /dirty reaches renderd" "$(cat "$MOCK_LOG")" "cmd=Dirty(2)"
+DIRTY_BODY=$(curl -s --max-time 5 "$BASE_URL/opt/night/6/40/40.png/dirty")
+assert_contains "options mode /dirty response body" "$DIRTY_BODY" "Tile submitted for rendering"
+
+# options mode: /status on a missing parameterized tile
+STMISS=$(curl -s --max-time 5 "$BASE_URL/opt/night/6/60/60.png/status")
+assert_contains "options mode /status missing" "$STMISS" "No tile could not be found"
+
+# options mode: bad suffix -> declined (404 by catch-all)
+assert_status "options mode: bad option suffix -> 404" "$BASE_URL/opt/day/6/32/32.png/junk" 404
+
+# options mode: extra segments beyond the suffix -> serve (upstream else)
+assert_status "options mode: extra segments serve" "$BASE_URL/opt/day/6/32/32.png/extra/more" 200
+
+# options mode: coordinate bounds still enforced
+assert_status "options mode: zoom above maxzoom -> 404" "$BASE_URL/opt/day/30/0/0.png" 404
+assert_status "options mode: x out of bounds -> 404" "$BASE_URL/opt/day/6/9999/0.png" 404
+assert_status "options mode: wrong extension -> 404" "$BASE_URL/opt/day/6/32/32.jpg" 404
+
+# options mode: missing parts -> declined
+assert_status "options mode: missing y -> 404" "$BASE_URL/opt/day/6/32.png" 404
+
+
 echo
 echo "================================"
 echo "PASS=$PASS FAIL=$FAIL"
