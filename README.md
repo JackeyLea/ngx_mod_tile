@@ -263,6 +263,42 @@ The stack renders a real map on the first request (Baku centre at zoom 12 is
 a 31 KB PNG). Restart `osm-renderd` after finishing the external data import
 to restore the land/ocean layers if you previously used the skip mode.
 
+### Ubuntu 26.04 variant
+
+Both Dockerfiles accept `UBUNTU_VERSION` (default `24.04`). The supplied
+`docker-compose.ubuntu26.yml` builds the same demo and real OSM services on
+Ubuntu 26.04, with separate image tags, ports and persistent volumes:
+
+```sh
+# demo map on http://localhost:8096/
+docker compose -p ngx_mod_tile_u26 \
+    -f docker-compose.yml -f docker-compose.ubuntu26.yml \
+    up -d --build renderd tileserver
+
+# real OSM map on http://localhost:8097/ (PBF in maps/ first)
+docker compose -p ngx_mod_tile_u26 \
+    -f docker-compose.yml -f docker-compose.ubuntu26.yml \
+    up -d --build db import osm-renderd osm-tileserver
+
+# watch the one-shot import
+docker compose -p ngx_mod_tile_u26 \
+    -f docker-compose.yml -f docker-compose.ubuntu26.yml logs -f import
+```
+
+Images are tagged `ngx-mod-tile:ubuntu26.04` and
+`ngx-mod-tile-renderd:ubuntu26.04`. The project name `ngx_mod_tile_u26` keeps
+containers/volumes separate from the 24.04 stack, so both versions can run
+side by side. The real stack starts renderd only after the PBF import and uses
+its own `tiles-osm` volume with `GENERATE_DEMO_STORE=no`, preventing demo
+placeholder tiles from shadowing real renders. No Nominatim or OSRM services
+are included.
+
+Verified with Ubuntu 26.04.1 LTS, osm2pgsql 2.2.0 and Mapnik 4.2.1: the Baku
+import and real 256x256 rendering work, and both the demo (8096) and real map
+(8097) pass all 13 Playwright user-interaction assertions. `fonts-noto-core`
+is installed explicitly because the style's optional remote font download is
+not always reachable.
+
 All source fetches default to CN mirrors: apt → `mirrors.cloud.tencent.com`,
 npm/cartotool → `registry.npmmirror.com`, Leaflet → npmmirror tarball,
 PostGIS image → `docker.m.daocloud.io`. The openstreetmap-carto repo is

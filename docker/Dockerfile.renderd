@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ############################################################################
-# renderd + Mapnik + openstreetmap-carto on Ubuntu 24.04 LTS.
+# renderd + Mapnik + openstreetmap-carto on Ubuntu 24.04/26.04 LTS.
 #
 # Mirrors the setup guide at blog.jackeylea.com (offline OSM map server):
 # PostgreSQL data lives in the separate postgis service; this image carries
@@ -14,7 +14,8 @@
 #   --build-arg GH_PROXY=            (empty = direct github)
 # ############################################################################
 
-FROM ubuntu:24.04
+ARG UBUNTU_VERSION=24.04
+FROM ubuntu:${UBUNTU_VERSION}
 
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 
@@ -24,7 +25,7 @@ ARG GH_PROXY=
 ARG OSCARTO_VERSION=v5.9.0
 ARG CARTO_VERSION=1.2.0
 
-# Ubuntu 24.04 deb822 sources use https://archive.ubuntu.com but the bare
+# Ubuntu deb822 sources use https://archive.ubuntu.com but the bare
 # image has no CA certificates: bootstrap certificates from the default http
 # source first, then switch to the CN https mirror for the real install.
 RUN apt-get update \
@@ -41,7 +42,7 @@ RUN sed -i "s|https\?://archive.ubuntu.com/ubuntu/|http://${APT_MIRROR}/ubuntu/|
         python3 python3-psycopg2 python3-yaml python3-shapely \
         python3-lxml python3-colormath \
         unzip curl git \
-        fonts-noto-cjk fonts-dejavu-core \
+        fonts-noto-core fonts-noto-cjk fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # openstreetmap-carto style, prepared on the host by docker/prepare-renderd.sh

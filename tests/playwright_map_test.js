@@ -16,12 +16,19 @@ function pass(name) {
 }
 
 async function waitForNewTiles(page, tileResponses, previousCount) {
+    // Fresh Mapnik tiles may take several seconds to render. Wait for both a
+    // decoded image and at least one new HTTP response instead of assuming the
+    // old zoom level's already-loaded images represent the new zoom.
+    const deadline = Date.now() + timeout;
+    while (tileResponses.length === previousCount) {
+        if (Date.now() >= deadline) {
+            throw new Error('timed out waiting for new tile responses');
+        }
+        await page.waitForTimeout(200);
+    }
     await page.waitForFunction(
         () => document.querySelectorAll('.leaflet-tile-loaded').length > 0,
         null, { timeout });
-    if (tileResponses.length === previousCount) {
-        await page.waitForTimeout(1000);
-    }
 }
 
 (async () => {
@@ -144,8 +151,15 @@ async function waitForNewTiles(page, tileResponses, previousCount) {
         pass('no JavaScript/console errors or failed tile responses');
 
         const screenshot = path.join(artifactDir, 'map.png');
-        await page.screenshot({ path: screenshot, fullPage: true });
-        console.log(`SCREENSHOT: ${screenshot}`);
+        try {
+            await page.screenshot({ path: screenshot, fullPage: true, timeout: 15000 });
+            console.log(`SCREENSHOT: ${screenshot}`);
+        } catch (error) {
+            // Screenshots are diagnostic artifacts, not a functional assertion.
+            // Some Mapnik/fontconfig combinations keep Chromium's font-ready
+            // promise pending even though all map assertions have passed.
+            console.warn(`WARNING: screenshot skipped: ${error.message}`);
+        }
 
         console.log(`PLAYWRIGHT PASS=${passed} FAIL=0`);
     } catch (error) {

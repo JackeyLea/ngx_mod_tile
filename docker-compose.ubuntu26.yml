@@ -1,0 +1,71 @@
+# Ubuntu 26.04 override for the standard ngx_mod_tile demo and real OSM stacks.
+#
+# Use together with docker-compose.yml and a separate project name:
+#   docker compose -p ngx_mod_tile_u26 \
+#     -f docker-compose.yml -f docker-compose.ubuntu26.yml \
+#     up -d --build renderd tileserver
+#
+# Real OSM map (after placing a PBF in maps/):
+#   docker compose -p ngx_mod_tile_u26 \
+#     -f docker-compose.yml -f docker-compose.ubuntu26.yml \
+#     up -d --build db import osm-renderd osm-tileserver
+
+services:
+  renderd:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        UBUNTU_VERSION: "26.04"
+    image: ngx-mod-tile:ubuntu26.04
+
+  tileserver:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        UBUNTU_VERSION: "26.04"
+    image: ngx-mod-tile:ubuntu26.04
+    ports: !override
+      - "8096:8080"
+
+  import:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.renderd
+      args:
+        UBUNTU_VERSION: "26.04"
+    image: ngx-mod-tile-renderd:ubuntu26.04
+
+  osm-renderd:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.renderd
+      args:
+        UBUNTU_VERSION: "26.04"
+    image: ngx-mod-tile-renderd:ubuntu26.04
+    # Start only after the schema and PBF import have completed; otherwise
+    # Mapnik aborts layer loading while planet_osm_* tables do not exist yet.
+    depends_on:
+      db:
+        condition: service_healthy
+      import:
+        condition: service_completed_successfully
+    volumes: !override
+      - tiles-osm:/data/tiles
+      - renderd-run:/run/renderd
+      - ./docker/renderd.conf:/etc/renderd/renderd.conf:ro
+
+  osm-tileserver:
+    image: ngx-mod-tile:ubuntu26.04
+    environment:
+      GENERATE_DEMO_STORE: "no"
+    ports: !override
+      - "8097:8080"
+    volumes: !override
+      - tiles-osm:/data/tiles
+      - renderd-run:/run/renderd
+      - ./docker/renderd.conf:/etc/renderd/renderd.conf:ro
+
+volumes:
+  tiles-osm: {}

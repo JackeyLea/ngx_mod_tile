@@ -1,1 +1,0 @@
-https://www.maksonlee.com/deploy-osm-services-with-nominatim-and-osrm-on-ubuntu-26-04/ 参考这个完整，生成一个基于ubuntu 26.04的docker配置。

@@ -3,7 +3,8 @@
 # ############################################################################
 # builder: compile nginx with ngx_http_tile_module and all optional stores
 # ############################################################################
-FROM ubuntu:24.04 AS builder
+ARG UBUNTU_VERSION=24.04
+FROM ubuntu:${UBUNTU_VERSION} AS builder
 
 ARG NGINX_VERSION=1.30.7
 ARG APT_MIRROR=mirrors.cloud.tencent.com
@@ -54,7 +55,7 @@ RUN ./configure \
 # ############################################################################
 # runtime: only the shared libraries the binary and module need
 # ############################################################################
-FROM ubuntu:24.04
+FROM ubuntu:${UBUNTU_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpcre2-8-0 zlib1g libssl3t64 \

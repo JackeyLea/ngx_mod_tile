@@ -3,11 +3,13 @@ set -e
 
 TILE_DIR="${TILE_DIR:-/data/tiles}"
 DEMO_RENDERD="${DEMO_RENDERD:-internal}"
+GENERATE_DEMO_STORE="${GENERATE_DEMO_STORE:-yes}"
 
 mkdir -p "$TILE_DIR" /var/log/nginx /var/cache/nginx
 
-# generate the demo store once (volume may be fresh)
-if [ ! -f "$TILE_DIR/.demo-generated" ]; then
+# generate the demo store once (volume may be fresh); the real Mapnik stack
+# disables this so placeholder tiles cannot shadow real rendered tiles
+if [ "$GENERATE_DEMO_STORE" = "yes" ] && [ ! -f "$TILE_DIR/.demo-generated" ]; then
     python3 /opt/demo/gen_metatiles.py "$TILE_DIR" default osmtest
     touch "$TILE_DIR/.demo-generated"
 fi
