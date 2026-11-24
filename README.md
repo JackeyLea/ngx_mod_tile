@@ -281,7 +281,7 @@ tests/run_tests.sh
 Spins up a mock renderd (`tests/mock_renderd.py`, speaks the real v2/v3
 protocol over a unix socket) and nginx with a generated metatile store
 (`tests/gen_metatiles.py`, byte-layout verified against upstream), then asserts
-137 behaviors across 10 phases: fresh hits and byte-exact bodies, HEAD, ETag/304, CORS
+146 behaviors across 11 phases: fresh hits and byte-exact bodies, HEAD, ETag/304, CORS
 (echo/Vary/403/preflight), gzip METZ handling, oob/bad-extension 404s, the
 renderd.conf-imported layer, TileJSON fields, /status texts, /dirty wire
 traffic, stale-tile serving with render submission, on-demand rendering with
@@ -300,8 +300,10 @@ last_modified_factor clamping), coordinate/URI edge cases (non-numeric, negative
 missing/wrong/uppercase extensions, zoom and coordinate bounds, extra
 segments and trailing slashes), options-mode status/dirty suffixes
 (clean/missing status text, cmdDirty submission and confirmation, coordinate
-bounds, bad suffix, extra segments), and multi-worker consistency (worker_processes 2,
-shared-memory token bucket exhaustion across workers, zone counter aggregation).
+bounds, bad suffix, extra segments), multi-worker consistency (worker_processes 2,
+shared-memory token bucket exhaustion across workers, zone counter aggregation),
+and stats zone retention across reload (HUP signal preserves NoResp200, layer, zoom,
+Prometheus metrics, and subsequent requests continue incrementing preserved counters).
 
 ## License
 

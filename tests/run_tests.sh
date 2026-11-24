@@ -441,6 +441,48 @@ M=$(curl -s --max-time 5 "$BASE_URL/mod_tile")
 TOTAL=$(echo "$M" | awk '/^NoResp200:/{print $2}')
 if [[ ${TOTAL:-0} -ge 7 ]]; then PASS=$((PASS+1)); echo "PASS: stats zone aggregates across workers (NoResp200=$TOTAL)"; else FAIL=$((FAIL+1)); FAILED_TESTS+=("stats multi-worker"); echo "FAIL: stats NoResp200=$TOTAL < 7"; fi
 
+echo "== phase 11: stats zone retention across reload (HUP) =="
+
+# Capture pre-reload stats snapshot
+M_PRE=$(curl -s --max-time 5 "$BASE_URL/mod_tile")
+C_200_PRE=$(echo "$M_PRE" | awk '/^NoResp200:/{print $2; exit}')
+C_LAYER_PRE=$(echo "$M_PRE" | awk '/^NoRes200Layer\/tiles\/:/{print $2; exit}')
+C_ZOOM0_PRE=$(echo "$M_PRE" | awk '/^NoRespZoom00:/{print $2; exit}')
+
+MX_PRE=$(curl -s --max-time 5 "$BASE_URL/metrics")
+PROM_200_PRE=$(echo "$MX_PRE" | awk -F' ' '/modtile_http_responses_total\{status="200"\}/{print $2; exit}')
+
+# Signal nginx to reload configuration
+NG_PID=$(cat /tmp/tile-test-nginx.pid)
+kill -HUP "$NG_PID"
+sleep 0.8
+assert_eq "nginx master alive after reload" "$(kill -0 "$NG_PID" 2>/dev/null && echo alive)" "alive"
+
+# Snapshot immediately after reload (no tile requests made yet)
+M_POST=$(curl -s --max-time 5 "$BASE_URL/mod_tile")
+C_200_POST=$(echo "$M_POST" | awk '/^NoResp200:/{print $2; exit}')
+C_LAYER_POST=$(echo "$M_POST" | awk '/^NoRes200Layer\/tiles\/:/{print $2; exit}')
+C_ZOOM0_POST=$(echo "$M_POST" | awk '/^NoRespZoom00:/{print $2; exit}')
+
+assert_eq "reload: NoResp200 preserved" "$C_200_POST" "$C_200_PRE"
+assert_eq "reload: layer counter preserved" "$C_LAYER_POST" "$C_LAYER_PRE"
+assert_eq "reload: zoom counter preserved" "$C_ZOOM0_POST" "$C_ZOOM0_PRE"
+
+MX_POST=$(curl -s --max-time 5 "$BASE_URL/metrics")
+PROM_200_POST=$(echo "$MX_POST" | awk -F' ' '/modtile_http_responses_total\{status="200"\}/{print $2; exit}')
+assert_eq "reload: Prometheus 200 metric preserved" "$PROM_200_POST" "$PROM_200_PRE"
+
+# Request a fresh zoom 0 tile and verify counters continue incrementing
+assert_status "tile request after reload 200" "$BASE_URL/tiles/0/0/0.png" 200
+M_AFTER=$(curl -s --max-time 5 "$BASE_URL/mod_tile")
+C_200_AFTER=$(echo "$M_AFTER" | awk '/^NoResp200:/{print $2; exit}')
+C_LAYER_AFTER=$(echo "$M_AFTER" | awk '/^NoRes200Layer\/tiles\/:/{print $2; exit}')
+C_ZOOM0_AFTER=$(echo "$M_AFTER" | awk '/^NoRespZoom00:/{print $2; exit}')
+
+assert_eq "reload: NoResp200 incremented" "$C_200_AFTER" "$(( C_200_PRE + 1 ))"
+assert_eq "reload: layer counter incremented" "$C_LAYER_AFTER" "$(( C_LAYER_PRE + 1 ))"
+assert_eq "reload: zoom counter incremented" "$C_ZOOM0_AFTER" "$(( C_ZOOM0_PRE + 1 ))"
+
 echo
 echo "================================"
 echo "PASS=$PASS FAIL=$FAIL"
