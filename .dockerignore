@@ -1,3 +1,4 @@
-build/
+build/*
+!build/nginx-1.30.7.tar.gz
 .git/
 /tmp/

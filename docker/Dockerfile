@@ -6,6 +6,7 @@
 FROM ubuntu:24.04 AS builder
 
 ARG NGINX_VERSION=1.30.7
+ARG APT_MIRROR=mirrors.cloud.tencent.com
 # enable every optional storage backend that has dev libs installed below
 ENV NGX_TILE_WITH_MEMCACHED=yes \
     NGX_TILE_WITH_RADOS=yes \
@@ -13,13 +14,27 @@ ENV NGX_TILE_WITH_MEMCACHED=yes \
     NGX_TILE_WITH_COMPOSITE=yes
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential wget ca-certificates \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN sed -i "s|https\?://archive.ubuntu.com/ubuntu/|http://${APT_MIRROR}/ubuntu/|g; \
+            s|https\?://security.ubuntu.com/ubuntu/|http://${APT_MIRROR}/ubuntu/|g" \
+        /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        build-essential wget \
         libpcre2-dev zlib1g-dev libssl-dev \
         libcurl4-openssl-dev libmemcached-dev librados-dev libcairo2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-RUN wget -q https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz \
+# prefer the cached tarball from the repository if present (offline builds),
+# otherwise download from nginx.org
+COPY build/nginx-1.30.7.tar.gz /tmp/nginx-cached.tar.gz
+RUN if [ -s /tmp/nginx-cached.tar.gz ]; then \
+        cp /tmp/nginx-cached.tar.gz nginx-${NGINX_VERSION}.tar.gz; \
+    else \
+        wget -q https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz; \
+    fi \
     && tar xzf nginx-${NGINX_VERSION}.tar.gz
 
 COPY LICENSE /src/LICENSE

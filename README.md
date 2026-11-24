@@ -331,6 +331,24 @@ Running these checks uncovered and fixed two real memory safety bugs:
 Both checks now pass cleanly with zero memory errors and zero unsuppressed
 definite leaks.
 
+### Network backend integration (Docker)
+
+```sh
+# memcached + read-only HTTP proxy: 12 assertions
+tests/run_backend_tests.sh
+
+# additionally start a single-node Ceph cluster and test RADOS: 17 assertions
+tests/run_backend_tests.sh --rados
+```
+
+`docker-compose.backends.yml` starts memcached, a deterministic HTTP tile
+upstream, a memcached-aware test renderd, and nginx on port 8095. The suite
+verifies byte-exact metatile reads, ETag/304, Cache-Control, thread-pool and
+direct memcached paths, an on-demand render/write/read round trip, HTTP proxy
+fetching, and layer counters. With `--rados`, a minimal Ceph v19 MON/MGR/OSD
+cluster (official `quay.io/ceph/ceph:v19` image) creates the `tiles` pool and
+verifies librados reads and conditional requests through the module.
+
 ## License
 
 - This module's glue code: GPL-2.0 (derivative of mod_tile; see `LICENSE`).

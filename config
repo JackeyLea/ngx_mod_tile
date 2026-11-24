@@ -18,6 +18,8 @@ if test -n "$ngx_module_link"; then
                       $ngx_addon_dir/src/tile_stats_shm.h \
                       $ngx_addon_dir/src/tile_delaypool_shm.h \
                       $ngx_addon_dir/vendor/tile_compat.h \
+                      $ngx_addon_dir/vendor/config.h \
+                      $ngx_addon_dir/vendor/glib_compat.h \
                       $ngx_addon_dir/vendor/g_logger.h \
                       $ngx_addon_dir/vendor/protocol.h \
                       $ngx_addon_dir/vendor/store.h \
@@ -56,24 +58,37 @@ if test -n "$ngx_module_link"; then
 
     if [ "$NGX_TILE_WITH_MEMCACHED" = yes ]; then
         have=NGX_TILE_WITH_MEMCACHED . auto/have
+        have=HAVE_LIBMEMCACHED . auto/have
+        ngx_module_srcs="$ngx_module_srcs $ngx_addon_dir/vendor/store_memcached.c"
+        ngx_module_deps="$ngx_module_deps $ngx_addon_dir/vendor/store_memcached.h"
         ngx_tile_libs="$ngx_tile_libs -lmemcached"
         echo " + ngx_mod_tile: memcached storage backend enabled"
     fi
 
     if [ "$NGX_TILE_WITH_RADOS" = yes ]; then
         have=NGX_TILE_WITH_RADOS . auto/have
+        have=HAVE_LIBRADOS . auto/have
+        ngx_module_srcs="$ngx_module_srcs $ngx_addon_dir/vendor/store_rados.c"
+        ngx_module_deps="$ngx_module_deps $ngx_addon_dir/vendor/store_rados.h"
         ngx_tile_libs="$ngx_tile_libs -lrados"
         echo " + ngx_mod_tile: rados storage backend enabled"
     fi
 
     if [ "$NGX_TILE_WITH_RO_HTTP_PROXY" = yes ]; then
         have=NGX_TILE_WITH_RO_HTTP_PROXY . auto/have
+        have=HAVE_LIBCURL . auto/have
+        ngx_module_srcs="$ngx_module_srcs $ngx_addon_dir/vendor/store_ro_http_proxy.c"
+        ngx_module_deps="$ngx_module_deps $ngx_addon_dir/vendor/store_ro_http_proxy.h"
         ngx_tile_libs="$ngx_tile_libs -lcurl"
         echo " + ngx_mod_tile: ro_http_proxy storage backend enabled"
     fi
 
     if [ "$NGX_TILE_WITH_COMPOSITE" = yes ]; then
         have=NGX_TILE_WITH_COMPOSITE . auto/have
+        have=NGX_TILE_WITH_RO_COMPOSITE . auto/have
+        have=HAVE_CAIRO . auto/have
+        ngx_module_srcs="$ngx_module_srcs $ngx_addon_dir/vendor/store_ro_composite.c"
+        ngx_module_deps="$ngx_module_deps $ngx_addon_dir/vendor/store_ro_composite.h"
         ngx_tile_libs="$ngx_tile_libs -lcairo"
         echo " + ngx_mod_tile: ro_composite storage backend enabled"
     fi

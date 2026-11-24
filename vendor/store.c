@@ -21,6 +21,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "config.h"
+
 #ifdef HAVE_PTHREAD
 #include <pthread.h>
 #endif

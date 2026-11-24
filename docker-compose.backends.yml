@@ -1,0 +1,81 @@
+# ngx_mod_tile network backends integration test stack
+#
+# Starts memcached, a read-only HTTP tile upstream, a demo renderd, and the
+# nginx tileserver configured with memcached:// and ro_http_proxy:// stores.
+# Ceph RADOS is optional via the "rados" profile.
+
+services:
+  memcached:
+    image: ${REGISTRY_MIRROR:-docker.m.daocloud.io}/library/memcached:1.6-alpine
+    command: ["memcached", "-m", "64", "-I", "4m"]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 11211"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    networks:
+      - tile-backend-test
+
+  tile-upstream:
+    image: ngx-mod-tile:latest
+    entrypoint: ["python3", "/opt/tests/tile_upstream.py", "8000"]
+    volumes:
+      - ./tests:/opt/tests:ro
+    networks:
+      - tile-backend-test
+
+  renderd:
+    image: ngx-mod-tile:latest
+    entrypoint: ["python3", "/opt/tests/backend_renderd.py",
+                 "--host", "0.0.0.0", "--port", "7654",
+                 "--memcached-host", "memcached", "--memcached-port", "11211"]
+    volumes:
+      - ./tests:/opt/tests:ro
+    networks:
+      - tile-backend-test
+
+  tileserver:
+    image: ngx-mod-tile:latest
+    environment:
+      DEMO_RENDERD: external
+      TILE_DIR: /data/tiles
+      NGINX_CONF: /opt/tests/docker_backends.conf
+    volumes:
+      - backend-tiles:/data/tiles
+      - ceph-etc:/etc/ceph:ro
+      - ./tests:/opt/tests:ro
+    ports:
+      - "8095:8080"
+    depends_on:
+      - memcached
+      - tile-upstream
+      - renderd
+    networks:
+      - tile-backend-test
+
+  # Optional single-node Ceph cluster (one MON/MGR/OSD, no authentication).
+  ceph:
+    image: quay.io/ceph/ceph:v19
+    profiles: ["rados"]
+    entrypoint: ["/bin/bash", "/opt/tests/ceph_bootstrap.sh"]
+    volumes:
+      - ./tests:/opt/tests:ro
+      - ceph-etc:/etc/ceph
+      - ceph-var:/var/lib/ceph
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/ceph-ready && ceph -s"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    networks:
+      tile-backend-test:
+        aliases:
+          - ceph
+
+networks:
+  tile-backend-test: {}
+
+volumes:
+  backend-tiles: {}
+  ceph-etc: {}
+  ceph-var: {}
