@@ -209,6 +209,9 @@ OSM_PBF_URL="https://download.geofabrik.de/asia/azerbaijan-latest.osm.pbf" \
 
 ## Docker
 
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the Mermaid deployment architecture,
+container/image/volume relationships, and the current runtime status snapshot.
+
 One-command build + run (multi-stage image: nginx + module compiled with
 every optional store; demo tile store generated on first start):
 
