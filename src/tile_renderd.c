@@ -486,13 +486,16 @@ ngx_http_tile_conn_finish(ngx_http_tile_conn_t *tc, ngx_int_t rc)
 {
     ngx_http_tile_conn_done_pt done = tc->done;
     void                      *data = tc->data;
+    ngx_pool_t                *pool = tc->pool;
 
     tc->destroyed = 1;
 
+    /* cache pool before invoking done: the callback finalizes the HTTP
+     * request, which destroys the request pool that tc was allocated from */
     done(data, rc);
 
-    if (tc->pool != NULL) {
-        ngx_destroy_pool(tc->pool);
+    if (pool != NULL) {
+        ngx_destroy_pool(pool);
     }
 }
 

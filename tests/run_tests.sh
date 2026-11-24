@@ -9,8 +9,12 @@ set -u
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(dirname "$HERE")"
-NGINX="$REPO/build/nginx-src/objs/nginx"
+NGINX="${TILE_TEST_NGINX:-$REPO/build/nginx-src/objs/nginx}"
 NGINX_CONF="$HERE/nginx_tile.conf"
+if [[ -n "${TILE_TEST_MODULE:-}" ]]; then
+    sed "s|^load_module .*|load_module $TILE_TEST_MODULE;|" "$HERE/nginx_tile.conf" > /tmp/nginx_tile_test_generated.conf
+    NGINX_CONF="/tmp/nginx_tile_test_generated.conf"
+fi
 
 BASE=/tmp/tilestore
 SOCKET=/tmp/tile-test-renderd.sock

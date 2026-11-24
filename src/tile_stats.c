@@ -267,7 +267,7 @@ ngx_http_tile_stats_page(ngx_http_request_t *r)
 {
     ngx_http_tile_loc_conf_t  *tlcf;
     ngx_http_tile_main_conf_t *mcf;
-    ngx_http_tile_stats_shm_t  stats;
+    ngx_http_tile_stats_shm_t  *stats;
     ngx_http_tile_layer_t     *layer;
     size_t                      size;
     u_char                     *buf, *p;
@@ -287,7 +287,12 @@ ngx_http_tile_stats_page(ngx_http_request_t *r)
             "Stats are not enabled for this server");
     }
 
-    ngx_http_tile_stats_copy(r, &stats);
+    stats = ngx_pcalloc(r->pool, sizeof(ngx_http_tile_stats_shm_t)
+                        + mcf->layer_count * 2 * sizeof(ngx_atomic_uint_t));
+    if (stats == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_http_tile_stats_copy(r, stats);
 
     size = 1024 + 96 * (NGX_TILE_MAX_ZOOM_SERVER + 1)
            + 128 * (mcf->layer_count + 1);
@@ -312,27 +317,27 @@ ngx_http_tile_stats_page(ngx_http_request_t *r)
         "NoFreshRender: %uL\n"
         "NoOldRender: %uL\n"
         "NoVeryOldRender: %uL\n",
-        stats.noResp200, stats.noResp304, stats.noResp404, stats.noResp503,
-        stats.noResp5XX, stats.noRespOther, stats.noFreshCache,
-        stats.noOldCache, stats.noVeryOldCache, stats.noFreshRender,
-        stats.noOldRender, stats.noVeryOldRender);
+        stats->noResp200, stats->noResp304, stats->noResp404, stats->noResp503,
+        stats->noResp5XX, stats->noRespOther, stats->noFreshCache,
+        stats->noOldCache, stats->noVeryOldCache, stats->noFreshRender,
+        stats->noOldRender, stats->noVeryOldRender);
 
     for (i = 0; i <= mcf->global_max_zoom; i++) {
         p = ngx_snprintf(p, buf + size - p, "NoRespZoom%02ui: %uL\n",
-                         i, stats.noRespZoom[i]);
+                         i, stats->noRespZoom[i]);
     }
 
     p = ngx_snprintf(p, buf + size - p,
         "NoTileBufferReads: %uL\n"
         "DurationTileBufferReads: %uL\n",
-        stats.noTotalBufferRetrieval, stats.totalBufferRetrievalTime);
+        stats->noTotalBufferRetrieval, stats->totalBufferRetrievalTime);
 
     for (i = 0; i <= mcf->global_max_zoom; i++) {
         p = ngx_snprintf(p, buf + size - p,
             "NoTileBufferReadZoom%02ui: %uL\n"
             "DurationTileBufferReadZoom%02ui: %uL\n",
-            i, stats.noZoomBufferRetrieval[i],
-            i, stats.zoomBufferRetrievalTime[i]);
+            i, stats->noZoomBufferRetrieval[i],
+            i, stats->zoomBufferRetrievalTime[i]);
     }
 
     for (i = 0; i < mcf->layer_count && i < mcf->layers_registry->nelts; i++) {
@@ -341,8 +346,8 @@ ngx_http_tile_stats_page(ngx_http_request_t *r)
         p = ngx_snprintf(p, buf + size - p,
             "NoRes200Layer%V: %uL\n"
             "NoRes404Layer%V: %uL\n",
-            &layer->baseuri, stats.noResp200Layer[i],
-            &layer->baseuri, stats.noResp404Layer[i]);
+            &layer->baseuri, stats->noResp200Layer[i],
+            &layer->baseuri, stats->noResp404Layer[i]);
     }
 
     return ngx_http_tile_send_text(r, NGX_HTTP_OK, (const char *) buf);
@@ -357,7 +362,7 @@ ngx_http_tile_metrics_page(ngx_http_request_t *r)
 {
     ngx_http_tile_loc_conf_t  *tlcf;
     ngx_http_tile_main_conf_t *mcf;
-    ngx_http_tile_stats_shm_t  stats;
+    ngx_http_tile_stats_shm_t  *stats;
     ngx_http_tile_layer_t     *layer;
     size_t                      size;
     u_char                     *buf, *p;
@@ -378,7 +383,12 @@ ngx_http_tile_metrics_page(ngx_http_request_t *r)
             "Stats are not enabled for this server");
     }
 
-    ngx_http_tile_stats_copy(r, &stats);
+    stats = ngx_pcalloc(r->pool, sizeof(ngx_http_tile_stats_shm_t)
+                        + mcf->layer_count * 2 * sizeof(ngx_atomic_uint_t));
+    if (stats == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    ngx_http_tile_stats_copy(r, stats);
 
     size = 4096 + 160 * (NGX_TILE_MAX_ZOOM_SERVER + 1)
            + 256 * (mcf->layer_count + 1);
@@ -399,8 +409,8 @@ ngx_http_tile_metrics_page(ngx_http_request_t *r)
         "modtile_http_responses_total{status=\"503\"} %uL\n"
         "modtile_http_responses_total{status=\"5XX\"} %uL\n"
         "modtile_http_responses_total{status=\"other\"} %uL\n",
-        stats.noResp200, stats.noResp304, stats.noResp404, stats.noResp503,
-        stats.noResp5XX, stats.noRespOther);
+        stats->noResp200, stats->noResp304, stats->noResp404, stats->noResp503,
+        stats->noResp5XX, stats->noRespOther);
 
     p = ngx_snprintf(p, buf + size - p,
         "# HELP modtile_tiles_total Number of tiles served by state\n"
@@ -411,8 +421,8 @@ ngx_http_tile_metrics_page(ngx_http_request_t *r)
         "modtile_tiles_total{age=\"fresh\",rendered=\"yes\"} %uL\n"
         "modtile_tiles_total{age=\"old\",rendered=\"attempted\"} %uL\n"
         "modtile_tiles_total{age=\"outdated\",rendered=\"attempted\"} %uL\n",
-        stats.noFreshCache, stats.noOldCache, stats.noVeryOldCache,
-        stats.noFreshRender, stats.noOldRender, stats.noVeryOldRender);
+        stats->noFreshCache, stats->noOldCache, stats->noVeryOldCache,
+        stats->noFreshRender, stats->noOldRender, stats->noVeryOldRender);
 
     p = ngx_snprintf(p, buf + size - p,
         "# HELP modtile_zoom_responses_total Number of HTTP responses by zoom\n"
@@ -420,7 +430,7 @@ ngx_http_tile_metrics_page(ngx_http_request_t *r)
     for (i = 0; i <= mcf->global_max_zoom; i++) {
         p = ngx_snprintf(p, buf + size - p,
             "modtile_zoom_responses_total{zoom=\"%02ui\"} %uL\n",
-            i, stats.noRespZoom[i]);
+            i, stats->noRespZoom[i]);
     }
 
     p = ngx_snprintf(p, buf + size - p,
@@ -429,7 +439,7 @@ ngx_http_tile_metrics_page(ngx_http_request_t *r)
     for (i = 0; i <= mcf->global_max_zoom; i++) {
         p = ngx_snprintf(p, buf + size - p,
             "modtile_tile_reads_total{zoom=\"%02ui\"} %uL\n",
-            i, stats.noZoomBufferRetrieval[i]);
+            i, stats->noZoomBufferRetrieval[i]);
     }
 
     p = ngx_snprintf(p, buf + size - p,
@@ -437,7 +447,7 @@ ngx_http_tile_metrics_page(ngx_http_request_t *r)
         "# TYPE modtile_tile_reads_seconds_total counter\n");
     for (i = 0; i <= mcf->global_max_zoom; i++) {
         (void) snprintf(secs, sizeof(secs), "%lf",
-                        stats.zoomBufferRetrievalTime[i] / 1000000.0);
+                        stats->zoomBufferRetrievalTime[i] / 1000000.0);
         p = ngx_snprintf(p, buf + size - p,
             "modtile_tile_reads_seconds_total{zoom=\"%02ui\"} %s\n",
             i, secs);
@@ -452,8 +462,8 @@ ngx_http_tile_metrics_page(ngx_http_request_t *r)
         p = ngx_snprintf(p, buf + size - p,
             "modtile_layer_responses_total{layer=\"%V\",status=\"200\"} %uL\n"
             "modtile_layer_responses_total{layer=\"%V\",status=\"404\"} %uL\n",
-            &layer->baseuri, stats.noResp200Layer[i],
-            &layer->baseuri, stats.noResp404Layer[i]);
+            &layer->baseuri, stats->noResp200Layer[i],
+            &layer->baseuri, stats->noResp404Layer[i]);
     }
 
     return ngx_http_tile_send_text(r, NGX_HTTP_OK, (const char *) buf);

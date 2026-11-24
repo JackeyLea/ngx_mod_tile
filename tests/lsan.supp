@@ -1,0 +1,2 @@
+leak:ngx_event_process_init
+leak:ngx_set_environment

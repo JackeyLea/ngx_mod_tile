@@ -305,6 +305,32 @@ shared-memory token bucket exhaustion across workers, zone counter aggregation),
 and stats zone retention across reload (HUP signal preserves NoResp200, layer, zoom,
 Prometheus metrics, and subsequent requests continue incrementing preserved counters).
 
+### Memory checks (ASan & Valgrind)
+
+```sh
+tests/run_memory_checks.sh
+```
+
+This script builds an AddressSanitizer-instrumented version of nginx and the
+dynamic module in `build/asan/`, runs the full 146-assertion test suite with
+LeakSanitizer enabled (`ASAN_OPTIONS` / `LSAN_OPTIONS` with `tests/lsan.supp`),
+and then runs a single-process Valgrind memcheck session (`tests/run_valgrind.sh`
+with `tests/nginx_valgrind.supp`).
+
+Running these checks uncovered and fixed two real memory safety bugs:
+1. **Heap-use-after-free in `src/tile_renderd.c`**: `ngx_http_tile_conn_finish`
+   accessed the connection context (`tc->pool`) after invoking the completion
+   callback, which finalizes the HTTP request and destroys the request pool
+   where `tc` resides. Fixed by caching the detached pool pointer before
+   invoking the callback.
+2. **Stack-buffer-overflow in `src/tile_stats.c`**: the stats/metrics endpoints
+   copied the shared-memory stats struct plus a dynamically-sized layer counter
+   array into a fixed-size stack variable. Fixed by allocating the snapshot
+   buffer dynamically from the request pool based on `mcf->layer_count`.
+
+Both checks now pass cleanly with zero memory errors and zero unsuppressed
+definite leaks.
+
 ## License
 
 - This module's glue code: GPL-2.0 (derivative of mod_tile; see `LICENSE`).

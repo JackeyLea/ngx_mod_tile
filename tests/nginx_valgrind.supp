@@ -1,0 +1,18 @@
+{
+   nginx-core-env
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:malloc
+   fun:ngx_alloc
+   fun:ngx_set_environment
+   ...
+}
+{
+   nginx-core-cycle
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   fun:malloc
+   fun:ngx_alloc
+   fun:ngx_event_process_init
+   ...
+}
