@@ -1,0 +1,16 @@
+# Browser test runner based on the locally mirrored Playwright image.
+# Browsers are already present under /ms-playwright; install only the matching
+# Node package and never download another browser copy.
+FROM mcr.m.daocloud.io/playwright:v1.49.1-noble
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+WORKDIR /opt/playwright
+RUN npm config set registry "$NPM_REGISTRY" \
+    && npm install --no-audit --no-fund --save-exact playwright@1.49.1
+
+COPY tests/playwright_map_test.js /opt/playwright/playwright_map_test.js
+
+ENTRYPOINT ["node", "/opt/playwright/playwright_map_test.js"]

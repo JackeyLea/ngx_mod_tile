@@ -349,6 +349,29 @@ fetching, and layer counters. With `--rados`, a minimal Ceph v19 MON/MGR/OSD
 cluster (official `quay.io/ceph/ceph:v19` image) creates the `tiles` pool and
 verifies librados reads and conditional requests through the module.
 
+### Browser/user-interaction tests (Playwright)
+
+```sh
+# demo map on http://localhost:8090/
+tests/run_playwright_tests.sh
+
+# real OSM/Mapnik map on http://localhost:8091/
+tests/run_playwright_tests.sh http://127.0.0.1:8091/
+```
+
+`docker/Dockerfile.playwright` extends the locally mirrored
+`mcr.m.daocloud.io/playwright:v1.49.1-noble` image and installs only the
+matching Node package (the Chromium/Firefox/WebKit binaries are already in the
+base image). The Chromium suite performs 13 assertions covering page/asset
+loads, decoded PNG tiles, zoom-in/zoom-out button clicks, mouse dragging, tile
+HTTP statuses, and JavaScript/console errors. Screenshots are written to
+`/tmp/ngx-mod-tile-playwright/map.png`.
+
+The browser suite exposed a real frontend bug: nginx returned `leaflet.css` as
+`text/plain`, so Chromium refused to apply it. Both Docker nginx configurations
+now include `mime.types`; the test also asserts browser-accepted JavaScript and
+CSS MIME types to prevent regressions.
+
 ## License
 
 - This module's glue code: GPL-2.0 (derivative of mod_tile; see `LICENSE`).
